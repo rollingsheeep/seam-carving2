@@ -42,6 +42,7 @@ cmake --build .
 
 ```bash
 # Windows (MinGW)
+cd d:/project/seam-carving2
 ## for seam_carving(self)
 g++ seam_carving.cpp -o seam_carving -I/ucrt64/include/opencv4 -L/ucrt64/lib -lopencv_imgcodecs -lopencv_imgproc -lopencv_highgui -lopencv_core -std=c++17
 ## for main(github)
@@ -96,6 +97,13 @@ Options:
 5. Resize with protective mask:
 ```bash
 ./seam_carving -resize -im images/example.jpg -out output/protected.jpg -dx -100 -mask images/protect.png
+```
+
+### Examples
+
+5. Resize image:
+```bash
+./main.exe images/Lena_512.png output/Lena_162.png --energy forward
 ```
 
 ## Implementation Details
