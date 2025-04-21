@@ -1,0 +1,26 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "g++",
+            "args": [
+                "-g",
+                "seam_carving.cpp",
+                "-o",
+                "seam_carving",
+                "-I",
+                "C:/opencv/build/include",
+                "-L",
+                "C:/opencv/build/x64/mingw/lib",
+                "-lopencv_world460",
+                "-std=c++17"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+} 
