@@ -31,10 +31,4 @@ void cleanupCUDA();
 // Returns true if CUDA is available and initialized
 bool isCUDAAvailable();
 
-// Visualization helpers
-void saveVisualizationsCUDA(const Image& img, const Matrix& lum, const Matrix& energy, const Matrix& dp, const std::vector<int>& seam, int stage, bool detailed_viz = false);
-
-// GPU-accelerated visualization of the seam on the image
-void visualizeSeamRemovalCUDA(const Image& img, const std::vector<int>& seam, const std::string& filename);
-
 } // namespace seam_carving_cuda 

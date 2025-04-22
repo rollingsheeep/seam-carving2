@@ -18,7 +18,6 @@ set(CUDA_SOURCES
     luminance_kernel.cu
     energy_kernels.cu
     dp_kernel.cu
-    visualization_kernel.cu
     seam_kernel.cu
     hybrid_energy_kernel.cu
 )
@@ -26,7 +25,6 @@ set(CUDA_SOURCES
 set(CXX_SOURCES
     seam_carving_cuda.cpp
     main_cuda.cpp
-    visualization.cpp
 )
 
 # Add executable and all sources

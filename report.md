@@ -1,8 +1,4 @@
-cd d:/project/seam-carving2
-
 # ORIGINAL
-seam_carving_sequential.exe ..\..\..\..\images\surfer.jpg ..\..\..\..\output\surfer_sequential.jpg --energy hybrid
-
 Using Sequential implementation
 Image loading time: 19 ms
 Luminance computation time: 4 ms
@@ -36,8 +32,6 @@ Total execution time: 62249 ms
 
 
 # OMP
-seam_carving_openmp.exe ..\..\..\..\images\surfer.jpg ..\..\..\..\output\surfer_omp.jpg --energy hybrid --threads 4
-
 Using 4 OpenMP threads
 Image loading time: 17 ms
 Luminance computation time: 1 ms
@@ -69,8 +63,6 @@ OK: generated ..\..\..\..\output\surfer_omp.jpg
 Total execution time: 49276 ms
 
 # CUDA
-seam_carving_cuda.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_cuda.jpg --energy hybrid
-
 Image loading time: 17 ms
 Found 1 CUDA device(s)
 Device 0: NVIDIA GeForce RTX 3050 Laptop GPU
@@ -85,8 +77,8 @@ Device 0: NVIDIA GeForce RTX 3050 Laptop GPU
   Memory bus width: 128 bits
 Using CUDA acceleration
 Using hybrid energy calculation
-Luminance computation time: 59 ms
-Initial energy computation time: 30 ms
+Luminance computation time: 60 ms
+Initial energy computation time: 29 ms
 Removing 1280 seams...
 Progress: 10% complete
 Progress: 20% complete
@@ -99,25 +91,22 @@ Progress: 80% complete
 Progress: 90% complete
 Progress: 100% complete
 Seam removal breakdown:
-  Dynamic programming: 25599.7 ms
-  Seam computation: 1568.64 ms
-  Visualization: 0 ms
-  Seam removal: 9163.25 ms
-  Energy update: 24233.2 ms
-  Total seam removal time: 61849 ms
-Image saving time: 141 ms
+  Dynamic programming: 2277.82 ms
+  Seam computation: 26.718 ms
+  Seam removal: 8782.06 ms
+  Energy update: 25042.1 ms
+  Total seam removal time: 37449 ms
+Image saving time: 134 ms
 
 Hybrid energy summary:
-  Backward energy usage: 78.95%
-  Forward energy usage: 21.05%
-  Ratio (Backward:Forward): 3.75:1
-OK: generated ..\..\..\output\surfer_cuda.jpg
-Total execution time: 62132 ms
+  Backward energy usage: 78.74%
+  Forward energy usage: 21.26%
+  Ratio (Backward:Forward): 3.70:1
+OK: generated ..\..\..\output\surfer_cuda4.jpg
+Total execution time: 37730 ms
 
 
 # MPI
-mpiexec -n 4 seam_carving_mpi.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_mpi.jpg --energy hybrid
-
 Using MPI implementation with 1 processes
 Image loading time: 19 ms
 Luminance computation time: 4 ms

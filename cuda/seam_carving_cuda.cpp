@@ -1,13 +1,11 @@
 #include "seam_carving_cuda.h"
 #include "data_structures.h"  // Use our new header instead of main.cpp
 #include "cuda_utils.h"
-#include "visualization.h"
-
 #include <iostream>
-#include <cstring>
-#include <cfloat>
 #include <cassert>
 #include <iomanip>
+#include <cstring>
+#include <cfloat>
 
 // Declare external C functions from CUDA files
 extern "C" {
@@ -125,18 +123,29 @@ void computeLuminanceCUDA(Matrix& lum, const Image& img) {
     if (!cuda_initialized) return;
     
     try {
-        // Ensure GPU memory is allocated
-        d_image.allocate(img.width * img.height);
-        d_luminance.allocate(lum.width * lum.height);
+        int width = img.width;
+        int height = img.height;
+        size_t image_size = width * height * sizeof(uint32_t);
+        size_t lum_size = width * height * sizeof(float);
         
-        // Copy image to device
-        d_image.copyToDevice(img.pixels.data(), img.width * img.height);
+        // Allocate device memory directly
+        uint32_t* d_img = nullptr;
+        float* d_lum = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_img, image_size));
+        CUDA_CHECK(cudaMalloc(&d_lum, lum_size));
+        
+        // Copy image to device using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(d_img, img.pixels.data(), image_size, cudaMemcpyHostToDevice));
         
         // Compute luminance
-        ::computeLuminanceCUDA(d_image.get(), d_luminance.get(), img.width, img.height);
+        ::computeLuminanceCUDA(d_img, d_lum, width, height);
         
-        // Copy result back to host
-        d_luminance.copyToHost(lum.items.data(), lum.width * lum.height);
+        // Copy result back to host using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(lum.items.data(), d_lum, lum_size, cudaMemcpyDeviceToHost));
+        
+        // Free device memory
+        CUDA_CHECK(cudaFree(d_img));
+        CUDA_CHECK(cudaFree(d_lum));
     } catch (const std::exception& e) {
         std::cerr << "Error in computeLuminanceCUDA: " << e.what() << std::endl;
     }
@@ -146,18 +155,28 @@ void computeSobelFilterCUDA(Matrix& energy, const Matrix& lum) {
     if (!cuda_initialized) return;
     
     try {
-        // Ensure GPU memory is allocated
-        d_luminance.allocate(lum.width * lum.height);
-        d_energy.allocate(energy.width * energy.height);
+        int width = lum.width;
+        int height = lum.height;
+        size_t matrix_size = width * height * sizeof(float);
         
-        // Copy luminance to device
-        d_luminance.copyToDevice(lum.items.data(), lum.width * lum.height);
+        // Allocate device memory directly
+        float* d_lum = nullptr;
+        float* d_energy = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_lum, matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_energy, matrix_size));
+        
+        // Copy luminance to device using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(d_lum, lum.items.data(), matrix_size, cudaMemcpyHostToDevice));
         
         // Compute Sobel filter
-        ::computeSobelCUDA(d_luminance.get(), d_energy.get(), lum.width, lum.height);
+        ::computeSobelCUDA(d_lum, d_energy, width, height);
         
-        // Copy result back to host
-        d_energy.copyToHost(energy.items.data(), energy.width * energy.height);
+        // Copy result back to host using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(energy.items.data(), d_energy, matrix_size, cudaMemcpyDeviceToHost));
+        
+        // Free device memory
+        CUDA_CHECK(cudaFree(d_lum));
+        CUDA_CHECK(cudaFree(d_energy));
     } catch (const std::exception& e) {
         std::cerr << "Error in computeSobelFilterCUDA: " << e.what() << std::endl;
     }
@@ -167,18 +186,28 @@ void computeForwardEnergyCUDA(Matrix& energy, const Matrix& lum) {
     if (!cuda_initialized) return;
     
     try {
-        // Ensure GPU memory is allocated
-        d_luminance.allocate(lum.width * lum.height);
-        d_energy.allocate(energy.width * energy.height);
+        int width = lum.width;
+        int height = lum.height;
+        size_t matrix_size = width * height * sizeof(float);
         
-        // Copy luminance to device
-        d_luminance.copyToDevice(lum.items.data(), lum.width * lum.height);
+        // Allocate device memory directly
+        float* d_lum = nullptr;
+        float* d_energy = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_lum, matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_energy, matrix_size));
+        
+        // Copy luminance to device using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(d_lum, lum.items.data(), matrix_size, cudaMemcpyHostToDevice));
         
         // Compute Forward Energy
-        ::computeForwardEnergyCUDA(d_luminance.get(), d_energy.get(), lum.width, lum.height);
+        ::computeForwardEnergyCUDA(d_lum, d_energy, width, height);
         
-        // Copy result back to host
-        d_energy.copyToHost(energy.items.data(), energy.width * energy.height);
+        // Copy result back to host using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(energy.items.data(), d_energy, matrix_size, cudaMemcpyDeviceToHost));
+        
+        // Free device memory
+        CUDA_CHECK(cudaFree(d_lum));
+        CUDA_CHECK(cudaFree(d_energy));
     } catch (const std::exception& e) {
         std::cerr << "Error in computeForwardEnergyCUDA: " << e.what() << std::endl;
     }
@@ -247,18 +276,8 @@ void computeDynamicProgrammingCUDA(Matrix& dp, const Matrix& energy) {
     if (!cuda_initialized) return;
     
     try {
-        // Ensure GPU memory is allocated
-        d_energy.allocate(energy.width * energy.height);
-        d_dp.allocate(dp.width * dp.height);
-        
-        // Copy energy to device
-        d_energy.copyToDevice(energy.items.data(), energy.width * energy.height);
-        
-        // Compute dynamic programming
-        ::computeDynamicProgrammingCUDA(d_energy.get(), d_dp.get(), energy.width, energy.height);
-        
-        // Copy result back to host
-        d_dp.copyToHost(dp.items.data(), dp.width * dp.height);
+        // Use the CPU implementation instead of CUDA
+        compute_dynamic_programming(energy, dp);
     } catch (const std::exception& e) {
         std::cerr << "Error in computeDynamicProgrammingCUDA: " << e.what() << std::endl;
     }
@@ -268,153 +287,118 @@ void computeSeamCUDA(std::vector<int>& seam, const Matrix& dp) {
     if (!cuda_initialized) return;
     
     try {
-        int height = dp.height;
-        int width = dp.width;
-        
-        seam.resize(height);
-        
-        // Find the minimum value in the last row (done on GPU)
-        int min_x = ::findMinIndexLastRowCUDA(d_dp.get(), width, height);
-        
-        // Allocate device memory for seam
-        d_seam.allocate(height);
-        
-        // Use new GPU-based backtracking
-        ::backtrackSeamCUDA(d_dp.get(), d_seam.get(), width, height, min_x);
-        
-        // Copy seam data back to host
-        d_seam.copyToHost(seam.data(), height);
+        compute_seam(dp, seam);
     } catch (const std::exception& e) {
         std::cerr << "Error in computeSeamCUDA: " << e.what() << std::endl;
-        
-        // Fallback to CPU implementation if CUDA fails
-        // First copy DP matrix to host
-        std::vector<float> host_dp(dp.width * dp.height);
-        d_dp.copyToHost(host_dp.data(), dp.width * dp.height);
-        
-        // Find minimum in last row
-        int y = dp.height - 1;
-        seam[y] = 0;
-        float min_energy = host_dp[y * dp.width];
-        for (int x = 1; x < dp.width; ++x) {
-            if (host_dp[y * dp.width + x] < min_energy) {
-                min_energy = host_dp[y * dp.width + x];
-                seam[y] = x;
-            }
-        }
-        
-        // Backtrack to find the seam
-        for (y = dp.height - 2; y >= 0; --y) {
-            int x = seam[y + 1];
-            seam[y] = x;  // Default: go straight up
-            
-            float up = host_dp[y * dp.width + x];
-            float up_left = x > 0 ? host_dp[y * dp.width + (x - 1)] : FLT_MAX;
-            float up_right = x < dp.width - 1 ? host_dp[y * dp.width + (x + 1)] : FLT_MAX;
-            
-            if (x > 0 && up_left < up && up_left <= up_right) {
-                seam[y] = x - 1;  // Go up-left
-            } else if (x < dp.width - 1 && up_right < up && up_right <= up_left) {
-                seam[y] = x + 1;  // Go up-right
-            }
-        }
     }
 }
 
 // Optimized CUDA implementation of seam removal
 void removeSeamCUDA(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& seam) {
-    if (!cuda_initialized) {
-        // Fall back to CPU implementation
-        remove_seam(img, lum, grad, seam);
-        return;
-    }
+    if (!cuda_initialized) return;
     
     try {
         int width = img.width;
         int height = img.height;
         int new_width = width - 1;
         
-        // Allocate device memory for output buffers
-        d_output_image.allocate(new_width * height);
-        d_output_lum.allocate(new_width * height);
-        d_output_energy.allocate(new_width * height);
-        d_seam.allocate(height);
+        size_t image_size = width * height * sizeof(uint32_t);
+        size_t new_image_size = new_width * height * sizeof(uint32_t);
+        size_t matrix_size = width * height * sizeof(float);
+        size_t new_matrix_size = new_width * height * sizeof(float);
+        size_t seam_size = height * sizeof(int);
         
-        // Copy seam data to device
-        d_seam.copyToDevice(seam.data(), height);
+        // Allocate device memory directly
+        uint32_t* d_input_image = nullptr;
+        uint32_t* d_output_image = nullptr;
+        float* d_input_lum = nullptr;
+        float* d_output_lum = nullptr;
+        float* d_input_grad = nullptr;
+        float* d_output_grad = nullptr;
+        int* d_seam = nullptr;
         
-        // Copy input data to device if not already there
-        d_image.copyToDevice(img.pixels.data(), width * height);
-        d_luminance.copyToDevice(lum.items.data(), width * height);
-        d_energy.copyToDevice(grad.items.data(), width * height);
+        CUDA_CHECK(cudaMalloc(&d_input_image, image_size));
+        CUDA_CHECK(cudaMalloc(&d_output_image, new_image_size));
+        CUDA_CHECK(cudaMalloc(&d_input_lum, matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_output_lum, new_matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_input_grad, matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_output_grad, new_matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_seam, seam_size));
         
-        // Execute CUDA kernels in parallel streams to overlap computation
-        cudaStream_t stream1, stream2, stream3;
-        cudaStreamCreate(&stream1);
-        cudaStreamCreate(&stream2);
-        cudaStreamCreate(&stream3);
+        // Copy data to device using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(d_input_image, img.pixels.data(), image_size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_input_lum, lum.items.data(), matrix_size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_input_grad, grad.items.data(), matrix_size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_seam, seam.data(), seam_size, cudaMemcpyHostToDevice));
         
         // Remove seam from image
-        cuda_removeSeamKernel(d_image.get(), d_output_image.get(), d_seam.get(), width, height);
+        ::cuda_removeSeamKernel(d_input_image, d_output_image, d_seam, width, height);
         
         // Remove seam from luminance matrix
-        removeSeamFromMatrixCUDA(d_luminance.get(), d_output_lum.get(), d_seam.get(), width, height);
+        ::removeSeamFromMatrixCUDA(d_input_lum, d_output_lum, d_seam, width, height);
         
-        // Remove seam from energy matrix
-        removeSeamFromMatrixCUDA(d_energy.get(), d_output_energy.get(), d_seam.get(), width, height);
+        // Remove seam from gradient matrix
+        ::removeSeamFromMatrixCUDA(d_input_grad, d_output_grad, d_seam, width, height);
         
-        // Copy results back to host
-        d_output_image.copyToHost(img.pixels.data(), new_width * height);
-        d_output_lum.copyToHost(lum.items.data(), new_width * height);
-        d_output_energy.copyToHost(grad.items.data(), new_width * height);
+        // Copy results back to host using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(img.pixels.data(), d_output_image, new_image_size, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(lum.items.data(), d_output_lum, new_matrix_size, cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(grad.items.data(), d_output_grad, new_matrix_size, cudaMemcpyDeviceToHost));
         
         // Update dimensions
-        --img.width;
-        --lum.width;
-        --grad.width;
-        img.stride = img.width;
-        lum.stride = lum.width;
-        grad.stride = grad.width;
+        img.width = new_width;
+        lum.width = new_width;
+        grad.width = new_width;
         
-        // Clean up streams
-        cudaStreamDestroy(stream1);
-        cudaStreamDestroy(stream2);
-        cudaStreamDestroy(stream3);
-    }
-    catch (const std::exception& e) {
+        // Free device memory
+        CUDA_CHECK(cudaFree(d_input_image));
+        CUDA_CHECK(cudaFree(d_output_image));
+        CUDA_CHECK(cudaFree(d_input_lum));
+        CUDA_CHECK(cudaFree(d_output_lum));
+        CUDA_CHECK(cudaFree(d_input_grad));
+        CUDA_CHECK(cudaFree(d_output_grad));
+        CUDA_CHECK(cudaFree(d_seam));
+    } catch (const std::exception& e) {
         std::cerr << "Error in removeSeamCUDA: " << e.what() << std::endl;
-        // Fall back to CPU implementation
-        remove_seam(img, lum, grad, seam);
     }
 }
 
 // Optimized CUDA implementation of gradient update after seam removal
 void updateGradientCUDA(Matrix& grad, const Matrix& lum, const std::vector<int>& seam) {
-    if (!cuda_initialized) {
-        // Fall back to CPU implementation
-        update_gradient(grad, lum, seam);
-        return;
-    }
+    if (!cuda_initialized) return;
     
     try {
         int width = grad.width;
         int height = grad.height;
+        size_t matrix_size = width * height * sizeof(float);
+        size_t seam_size = height * sizeof(int);
         
-        // Copy data to device
-        d_luminance.copyToDevice(lum.items.data(), width * height);
-        d_energy.copyToDevice(grad.items.data(), width * height);
-        d_seam.copyToDevice(seam.data(), height);
+        // Allocate device memory directly
+        float* d_grad = nullptr;
+        float* d_lum = nullptr;
+        int* d_seam = nullptr;
         
-        // Execute CUDA kernel
-        ::updateGradientCUDA(d_energy.get(), d_luminance.get(), d_seam.get(), width, height);
+        CUDA_CHECK(cudaMalloc(&d_grad, matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_lum, matrix_size));
+        CUDA_CHECK(cudaMalloc(&d_seam, seam_size));
         
-        // Copy updated gradient back to host
-        d_energy.copyToHost(grad.items.data(), width * height);
-    }
-    catch (const std::exception& e) {
+        // Copy data to device using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(d_grad, grad.items.data(), matrix_size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_lum, lum.items.data(), matrix_size, cudaMemcpyHostToDevice));
+        CUDA_CHECK(cudaMemcpy(d_seam, seam.data(), seam_size, cudaMemcpyHostToDevice));
+        
+        // Update gradient
+        ::updateGradientCUDA(d_grad, d_lum, d_seam, width, height);
+        
+        // Copy result back to host using cudaMemcpy directly
+        CUDA_CHECK(cudaMemcpy(grad.items.data(), d_grad, matrix_size, cudaMemcpyDeviceToHost));
+        
+        // Free device memory
+        CUDA_CHECK(cudaFree(d_grad));
+        CUDA_CHECK(cudaFree(d_lum));
+        CUDA_CHECK(cudaFree(d_seam));
+    } catch (const std::exception& e) {
         std::cerr << "Error in updateGradientCUDA: " << e.what() << std::endl;
-        // Fall back to CPU implementation
-        update_gradient(grad, lum, seam);
     }
 }
 
@@ -435,72 +419,10 @@ void cleanupCUDA() {
             std::cout << "  Ratio (Backward:Forward): " << backward_ratio / forward_ratio << ":1" << std::endl;
         }
         
-        d_image.free();
-        d_luminance.free();
-        d_energy.free();
-        d_dp.free();
-        d_output_image.free();
-        d_seam.free();
-        d_forward_energy.free();
-        d_backward_energy.free();
-        d_output_lum.free();
-        d_output_energy.free();
+        // No need to free memory here as we're now freeing it after each operation
+        cuda_initialized = false;
     } catch (const std::exception& e) {
         std::cerr << "Error cleaning up CUDA resources: " << e.what() << std::endl;
-    }
-    
-    cuda_initialized = false;
-}
-
-void saveVisualizationsCUDA(const Image& img, const Matrix& lum, const Matrix& energy, const Matrix& dp, 
-                           const std::vector<int>& seam, int stage, bool detailed_viz) {
-    visualization::saveStageVisualizations(img, lum, energy, dp, seam, stage, detailed_viz);
-}
-
-// GPU-accelerated visualization of the seam on the image
-void visualizeSeamRemovalCUDA(const Image& img, const std::vector<int>& seam, const std::string& filename) {
-    static int frame_counter = 0;
-    frame_counter++;
-    
-    // Only update every 10th frame to reduce disk I/O and improve performance
-    if (frame_counter % 10 != 0) {
-        return;
-    }
-    
-    if (!cuda_initialized) {
-        // Fall back to CPU implementation if CUDA is not available
-        visualization::visualizeSeamRemoval(img, seam, filename);
-        return;
-    }
-    
-    try {
-        int width = img.width;
-        int height = img.height;
-        
-        // Allocate device memory for image, seam, and output
-        d_image.allocate(width * height);
-        d_seam.allocate(height);
-        d_output_image.allocate(width * height);
-        
-        // Copy data to device
-        d_image.copyToDevice(img.pixels.data(), width * height);
-        d_seam.copyToDevice(seam.data(), height);
-        
-        // Execute CUDA kernel to visualize seam
-        ::visualizeSeamCUDA(d_image.get(), d_output_image.get(), d_seam.get(), width, height);
-        
-        // Copy result back to host
-        std::vector<uint32_t> output_pixels(width * height);
-        d_output_image.copyToHost(output_pixels.data(), width * height);
-        
-        // Save the image to disk
-        if (!stbi_write_png(filename.c_str(), width, height, 4, output_pixels.data(), width * sizeof(uint32_t))) {
-            std::cerr << "ERROR: could not save visualization to " << filename << std::endl;
-        }
-    } catch (const std::exception& e) {
-        std::cerr << "Error in visualizeSeamRemovalCUDA: " << e.what() << std::endl;
-        // Fall back to CPU implementation
-        visualization::visualizeSeamRemoval(img, seam, filename);
     }
 }
 

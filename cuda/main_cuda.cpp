@@ -1,6 +1,5 @@
 #include "data_structures.h"  // Include our new header file
 #include "seam_carving_cuda.h"
-#include "visualization.h"  // Add this include at the top
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -165,11 +164,6 @@ int main(int argc, char** argv) {
     long long total_seam_time = 0;
     long long total_remove_time = 0;
     long long total_update_time = 0;
-    long long total_viz_time = 0;
-    
-    // Stages for visualization
-    const int stages[] = {1, 25, 50, 100};
-    int next_stage_idx = 0;
     
     for (int i = 0; i < seams_to_remove; ++i) {
         // Create a new dp matrix with the current dimensions
@@ -178,6 +172,7 @@ int main(int argc, char** argv) {
         // Time dynamic programming
         auto dp_start = std::chrono::high_resolution_clock::now();
         if (use_cuda) {
+            // Using CPU implementation for dynamic programming as CUDA version was slower
             seam_carving_cuda::computeDynamicProgrammingCUDA(dp_current, grad);
         } else {
             compute_dynamic_programming(grad, dp_current);
@@ -194,31 +189,6 @@ int main(int argc, char** argv) {
         }
         auto seam_end = std::chrono::high_resolution_clock::now();
         total_seam_time += std::chrono::duration_cast<std::chrono::microseconds>(seam_end - seam_start).count();
-        
-        // Visualize the seam on the current image
-        auto viz_start = std::chrono::high_resolution_clock::now();
-        if (visualize) {
-            if (use_cuda) {
-                // Use GPU-accelerated visualization
-                seam_carving_cuda::visualizeSeamRemovalCUDA(img, seam, "output.png");
-            } else {
-                // Fall back to CPU implementation
-                visualization::visualizeSeamRemoval(img, seam);
-            }
-        }
-        
-        // Check if we need to visualize this stage (detailed visualization for specific stages)
-        if ((visualize && detailed_viz) && next_stage_idx < 4 && i + 1 == stages[next_stage_idx]) {
-            if (use_cuda) {
-                seam_carving_cuda::saveVisualizationsCUDA(img, lum, grad, dp_current, seam, i + 1, detailed_viz);
-            } else {
-                // Use the visualization namespace
-                visualization::saveStageVisualizations(img, lum, grad, dp_current, seam, i + 1, detailed_viz);
-            }
-            next_stage_idx++;
-        }
-        auto viz_end = std::chrono::high_resolution_clock::now();
-        total_viz_time += std::chrono::duration_cast<std::chrono::microseconds>(viz_end - viz_start).count();
         
         // Time seam removal
         auto remove_start = std::chrono::high_resolution_clock::now();
@@ -270,7 +240,6 @@ int main(int argc, char** argv) {
     std::cout << "Seam removal breakdown:\n";
     std::cout << "  Dynamic programming: " << (total_dp_time / 1000.0) << " ms\n";
     std::cout << "  Seam computation: " << (total_seam_time / 1000.0) << " ms\n";
-    std::cout << "  Visualization: " << (total_viz_time / 1000.0) << " ms\n";
     std::cout << "  Seam removal: " << (total_remove_time / 1000.0) << " ms\n";
     std::cout << "  Energy update: " << (total_update_time / 1000.0) << " ms\n";
     std::cout << "  Total seam removal time: " << seam_removal_duration.count() << " ms\n";
