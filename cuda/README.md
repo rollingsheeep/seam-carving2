@@ -42,7 +42,7 @@ cmake -G "Visual Studio 17 2022" -A x64 ..
 
 in x64
 seam_carving_cuda.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_cuda.jpg --energy hybrid
-
+seam_carving_sequential.exe ..\..\..\..\images\surfer.jpg ..\..\..\..\output\surfer_sequential.jpg --energy hybrid
 ## Usage
 
 ```bash

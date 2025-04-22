@@ -1,30 +1,42 @@
 # Seam Carving Implementation
 
-This is a C++ implementation of the seam carving algorithm for content-aware image resizing, based on the paper "Seam Carving for Content-Aware Image Resizing" by Shai Avidan and Ariel Shamir. The implementation uses OpenCV for image processing and supports both image resizing and object removal.
+This is a C++ implementation of the seam carving algorithm for content-aware image resizing, based on the paper "Seam Carving for Content-Aware Image Resizing" by Shai Avidan and Ariel Shamir. The implementation includes sequential, OpenMP, and CUDA versions for performance comparison.
 
 ## Features
 
-- Content-aware image resizing (both enlarging and reducing)
-- Object removal using seam carving
-- Forward energy calculation for better results
-- Support for protective masking
-- Visualization of seam removal process
-- Both vertical and horizontal seam operations
-
-## Prerequisites
-
-- OpenCV 4.x
-- C++ compiler with C++17 support
-- CMake 3.x (optional, for build configuration)
+- Content-aware image resizing using seam carving
+- Multiple energy calculation methods:
+  - Forward energy (as described in "Improved Seam Carving for Video Retargeting")
+  - Backward energy (classic Sobel filter approach)
+  - Hybrid energy (dynamic selection between forward and backward)
+- Three implementation approaches:
+  - Sequential (single-threaded)
+  - OpenMP (CPU multi-threading)
+  - CUDA (GPU acceleration)
+- Performance benchmarking and comparison
 
 ## Project Structure
 
 ```
 .
-├── seam_carving.cpp    # Main implementation file
-├── CMakeLists.txt     # CMake build configuration
-├── images/            # Test images directory
-└── output/           # Output directory for processed images
+├── main.cpp                # Main launcher
+├── sequential/             # Sequential implementation
+│   ├── sequential_impl.cpp # Sequential implementation code
+│   └── CMakeLists.txt      # CMake build script for sequential version
+├── openmp/                 # OpenMP implementation
+│   ├── omp_impl.cpp        # OpenMP implementation code
+│   └── CMakeLists.txt      # CMake build script for OpenMP version
+├── cuda/                   # CUDA implementation
+│   ├── seam_carving_cuda.cpp    # CUDA implementation code
+│   ├── *.cu                     # CUDA kernel files
+│   └── CMakeLists.txt           # CMake build script for CUDA version
+├── stb_image.h             # Image loading library
+├── stb_image_write.h       # Image writing library
+├── CMakeLists.txt          # Main CMake build script
+├── build.bat               # Windows build script
+├── build.sh                # Unix build script
+├── images/                 # Test images directory
+└── output/                 # Output directory for processed images
 ```
 
 ## Building
@@ -32,10 +44,15 @@ This is a C++ implementation of the seam carving algorithm for content-aware ima
 ### Using CMake
 
 ```bash
+# Create a build directory
 mkdir build
 cd build
+
+# Configure the project
 cmake ..
-cmake --build .
+
+# Build the project
+cmake --build . --config Release
 ```
 
 ### Manual Build using UCRT64
