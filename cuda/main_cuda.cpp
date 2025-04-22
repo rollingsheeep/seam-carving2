@@ -14,6 +14,7 @@
 // Command line arguments
 bool use_cuda = true;
 bool visualize = false;
+bool detailed_viz = false;
 std::string energy_type_str = "hybrid";
 std::string input_path;
 std::string output_path;
@@ -24,7 +25,8 @@ void parse_arguments(int argc, char** argv) {
         std::cerr << "Options:\n";
         std::cerr << "  --energy <forward|backward|hybrid>  Choose energy calculation method (default: hybrid)\n";
         std::cerr << "  --cpu                               Disable CUDA acceleration\n";
-        std::cerr << "  --visualize                         Enable visualization of intermediate steps\n";
+        std::cerr << "  --visualize                         Enable visualization of seam removal (output.png)\n";
+        std::cerr << "  --detailed-viz                      Enable detailed visualization outputs\n";
         exit(1);
     }
 
@@ -40,6 +42,9 @@ void parse_arguments(int argc, char** argv) {
             use_cuda = false;
         } else if (arg == "--visualize") {
             visualize = true;
+        } else if (arg == "--detailed-viz") {
+            detailed_viz = true;
+            visualize = true; // Detailed visualization implies visualization
         } else {
             std::cerr << "Unknown argument: " << arg << std::endl;
             exit(1);
@@ -160,6 +165,7 @@ int main(int argc, char** argv) {
     long long total_seam_time = 0;
     long long total_remove_time = 0;
     long long total_update_time = 0;
+    long long total_viz_time = 0;
     
     // Stages for visualization
     const int stages[] = {1, 25, 50, 100};
@@ -189,16 +195,30 @@ int main(int argc, char** argv) {
         auto seam_end = std::chrono::high_resolution_clock::now();
         total_seam_time += std::chrono::duration_cast<std::chrono::microseconds>(seam_end - seam_start).count();
         
-        // Check if we need to visualize this stage
-        if (visualize && next_stage_idx < 4 && i + 1 == stages[next_stage_idx]) {
+        // Visualize the seam on the current image
+        auto viz_start = std::chrono::high_resolution_clock::now();
+        if (visualize) {
             if (use_cuda) {
-                seam_carving_cuda::saveVisualizationsCUDA(img, lum, grad, dp_current, seam, i + 1);
+                // Use GPU-accelerated visualization
+                seam_carving_cuda::visualizeSeamRemovalCUDA(img, seam, "output.png");
             } else {
-                // Use the visualization namespace properly
-                visualization::saveStageVisualizations(img, lum, grad, dp_current, seam, i + 1);
+                // Fall back to CPU implementation
+                visualization::visualizeSeamRemoval(img, seam);
+            }
+        }
+        
+        // Check if we need to visualize this stage (detailed visualization for specific stages)
+        if ((visualize && detailed_viz) && next_stage_idx < 4 && i + 1 == stages[next_stage_idx]) {
+            if (use_cuda) {
+                seam_carving_cuda::saveVisualizationsCUDA(img, lum, grad, dp_current, seam, i + 1, detailed_viz);
+            } else {
+                // Use the visualization namespace
+                visualization::saveStageVisualizations(img, lum, grad, dp_current, seam, i + 1, detailed_viz);
             }
             next_stage_idx++;
         }
+        auto viz_end = std::chrono::high_resolution_clock::now();
+        total_viz_time += std::chrono::duration_cast<std::chrono::microseconds>(viz_end - viz_start).count();
         
         // Time seam removal
         auto remove_start = std::chrono::high_resolution_clock::now();
@@ -250,6 +270,7 @@ int main(int argc, char** argv) {
     std::cout << "Seam removal breakdown:\n";
     std::cout << "  Dynamic programming: " << (total_dp_time / 1000.0) << " ms\n";
     std::cout << "  Seam computation: " << (total_seam_time / 1000.0) << " ms\n";
+    std::cout << "  Visualization: " << (total_viz_time / 1000.0) << " ms\n";
     std::cout << "  Seam removal: " << (total_remove_time / 1000.0) << " ms\n";
     std::cout << "  Energy update: " << (total_update_time / 1000.0) << " ms\n";
     std::cout << "  Total seam removal time: " << seam_removal_duration.count() << " ms\n";

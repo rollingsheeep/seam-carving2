@@ -7,6 +7,7 @@
 #include <cstring>
 #include <cfloat>
 #include <cassert>
+#include <iomanip>
 
 // Declare external C functions from CUDA files
 extern "C" {
@@ -20,6 +21,27 @@ extern "C" {
     // From dp_kernel.cu
     void computeDynamicProgrammingCUDA(const float* energy_data, float* dp_data, int width, int height);
     int findMinIndexLastRowCUDA(const float* dp_data, int width, int height);
+    void backtrackSeamCUDA(const float* dp_data, int* seam_data, int width, int height, int min_idx);
+    
+    // From visualization_kernel.cu
+    void visualizeSeamCUDA(const uint32_t* image_data, uint32_t* output_data, const int* seam_data, int width, int height);
+    
+    // From seam_kernel.cu
+    void cuda_removeSeamKernel(const uint32_t* d_input_image, uint32_t* d_output_image, 
+                      const int* d_seam, int width, int height);
+    void removeSeamFromMatrixCUDA(const float* d_input_matrix, float* d_output_matrix, 
+                               const int* d_seam, int width, int height);
+    void updateGradientCUDA(float* d_gradient, const float* d_luminance, 
+                          const int* d_seam, int width, int height);
+    
+    // From hybrid_energy_kernel.cu
+    void computeHybridEnergyCUDA(const float* d_luminance, float* d_energy, 
+                               const float* d_forward_energy, const float* d_backward_energy,
+                               int width, int height, float* h_backward_weight, float* h_forward_weight);
+    void computeEnergyStatsCUDA(const float* d_backward_energy, const float* d_forward_energy,
+                              float* h_min_backward, float* h_max_backward, float* h_avg_backward,
+                              float* h_min_forward, float* h_max_forward, float* h_avg_forward,
+                              int width, int height);
 }
 
 namespace seam_carving_cuda {
@@ -29,6 +51,12 @@ cuda_utils::CudaMemory<uint32_t> d_image;
 cuda_utils::CudaMemory<float> d_luminance;
 cuda_utils::CudaMemory<float> d_energy;
 cuda_utils::CudaMemory<float> d_dp;
+cuda_utils::CudaMemory<uint32_t> d_output_image;
+cuda_utils::CudaMemory<int> d_seam;
+cuda_utils::CudaMemory<float> d_forward_energy;
+cuda_utils::CudaMemory<float> d_backward_energy;
+cuda_utils::CudaMemory<float> d_output_lum;
+cuda_utils::CudaMemory<float> d_output_energy;
 
 bool cuda_initialized = false;
 
@@ -160,65 +188,58 @@ void computeHybridEnergyCUDA(Matrix& energy, const Matrix& lum) {
     if (!cuda_initialized) return;
     
     try {
-        // Allocate a temporary matrix for the second energy type
-        Matrix forwardEnergy(lum.width, lum.height);
-        Matrix backwardEnergy(lum.width, lum.height);
+        int width = lum.width;
+        int height = lum.height;
+        
+        // Allocate temporary matrices for forward and backward energy
+        Matrix forwardEnergy(width, height);
+        Matrix backwardEnergy(width, height);
         
         // Compute both energy types
         computeSobelFilterCUDA(backwardEnergy, lum);
         computeForwardEnergyCUDA(forwardEnergy, lum);
         
-        // Ensure GPU memory is allocated for the final energy
-        d_energy.allocate(energy.width * energy.height);
+        // Allocate device memory for both energy types
+        d_forward_energy.allocate(width * height);
+        d_backward_energy.allocate(width * height);
+        d_energy.allocate(width * height);
         
-        // Reset energy ratio trackers for this calculation
-        float frame_backward_weight = 0.0f;
-        float frame_forward_weight = 0.0f;
+        // Copy both energy matrices to device
+        d_forward_energy.copyToDevice(forwardEnergy.items.data(), width * height);
+        d_backward_energy.copyToDevice(backwardEnergy.items.data(), width * height);
         
-        // Combine both energy values based on position in the image
-        // Logic: Use more forward energy in highly textured regions (high gradient)
-        // and more backward energy in smooth regions
-        for (int y = 0; y < lum.height; ++y) {
-            for (int x = 0; x < lum.width; ++x) {
-                // Normalize the backward energy to determine the blending factor
-                float gradient = backwardEnergy.at(y, x);
-                
-                // Calculate the mix factor - more gradient means more forward energy influence
-                // Use a much lower threshold to increase forward energy influence
-                float mixFactor = std::min(1.0f, gradient / 5.0f);
-                
-                // Track the weights used
-                float backwardWeight = 1.0f - mixFactor;
-                float forwardWeight = mixFactor;
-                
-                frame_backward_weight += backwardWeight;
-                frame_forward_weight += forwardWeight;
-                
-                // Blend the two energy types
-                energy.at(y, x) = backwardWeight * backwardEnergy.at(y, x) + 
-                                  forwardWeight * forwardEnergy.at(y, x);
-            }
-        }
+        // Variables to track energy weights
+        float backward_weight = 0.0f;
+        float forward_weight = 0.0f;
+        
+        // Compute hybrid energy directly on GPU
+        ::computeHybridEnergyCUDA(d_luminance.get(), d_energy.get(), 
+                                d_forward_energy.get(), d_backward_energy.get(),
+                                width, height, &backward_weight, &forward_weight);
+        
+        // Copy result back to host
+        d_energy.copyToHost(energy.items.data(), width * height);
         
         // Update global counters
-        total_backward_weight += frame_backward_weight;
-        total_forward_weight += frame_forward_weight;
+        total_backward_weight += backward_weight;
+        total_forward_weight += forward_weight;
         
-        // Calculate the ratio for this frame
-        float total_pixels = lum.width * lum.height;
-        float frame_backward_ratio = frame_backward_weight / total_pixels;
-        float frame_forward_ratio = frame_forward_weight / total_pixels;
-        
-        // Output the energy ratio for this frame
-        // std::cout << "  Hybrid energy ratio - Backward: " 
-        //           << std::fixed << std::setprecision(2) << frame_backward_ratio * 100.0f << "%, Forward: " 
-        //           << frame_forward_ratio * 100.0f << "%" << std::endl;
-        
-        // Copy the final result to GPU
-        d_energy.copyToDevice(energy.items.data(), energy.width * energy.height);
+        // Calculate the ratio for this frame for debugging
+        float total_pixels = width * height;
+        float frame_backward_ratio = backward_weight / total_pixels;
+        float frame_forward_ratio = forward_weight / total_pixels;
     }
     catch (const std::exception& e) {
         std::cerr << "Error in computeHybridEnergyCUDA: " << e.what() << std::endl;
+        
+        // Fall back to CPU implementation using the new normalized hybrid energy
+        float backward_weight = 0.0f;
+        float forward_weight = 0.0f;
+        compute_hybrid_energy(lum, energy, &backward_weight, &forward_weight);
+        
+        // Update global counters
+        total_backward_weight += backward_weight;
+        total_forward_weight += forward_weight;
     }
 }
 
@@ -252,33 +273,148 @@ void computeSeamCUDA(std::vector<int>& seam, const Matrix& dp) {
         
         seam.resize(height);
         
-        // Find the minimum value in the last row (can be done on GPU)
+        // Find the minimum value in the last row (done on GPU)
         int min_x = ::findMinIndexLastRowCUDA(d_dp.get(), width, height);
         
-        // The rest of the seam computation is done on CPU
-        seam[height - 1] = min_x;
+        // Allocate device memory for seam
+        d_seam.allocate(height);
         
-        // Copy DP matrix to host for backtracking
-        std::vector<float> host_dp(width * height);
-        d_dp.copyToHost(host_dp.data(), width * height);
+        // Use new GPU-based backtracking
+        ::backtrackSeamCUDA(d_dp.get(), d_seam.get(), width, height, min_x);
         
-        // Backtrack to find the seam (this part is hard to parallelize efficiently)
-        for (int y = height - 2; y >= 0; --y) {
+        // Copy seam data back to host
+        d_seam.copyToHost(seam.data(), height);
+    } catch (const std::exception& e) {
+        std::cerr << "Error in computeSeamCUDA: " << e.what() << std::endl;
+        
+        // Fallback to CPU implementation if CUDA fails
+        // First copy DP matrix to host
+        std::vector<float> host_dp(dp.width * dp.height);
+        d_dp.copyToHost(host_dp.data(), dp.width * dp.height);
+        
+        // Find minimum in last row
+        int y = dp.height - 1;
+        seam[y] = 0;
+        float min_energy = host_dp[y * dp.width];
+        for (int x = 1; x < dp.width; ++x) {
+            if (host_dp[y * dp.width + x] < min_energy) {
+                min_energy = host_dp[y * dp.width + x];
+                seam[y] = x;
+            }
+        }
+        
+        // Backtrack to find the seam
+        for (y = dp.height - 2; y >= 0; --y) {
             int x = seam[y + 1];
             seam[y] = x;  // Default: go straight up
             
-            float up = host_dp[y * width + x];
-            float up_left = x > 0 ? host_dp[y * width + (x - 1)] : FLT_MAX;
-            float up_right = x < width - 1 ? host_dp[y * width + (x + 1)] : FLT_MAX;
+            float up = host_dp[y * dp.width + x];
+            float up_left = x > 0 ? host_dp[y * dp.width + (x - 1)] : FLT_MAX;
+            float up_right = x < dp.width - 1 ? host_dp[y * dp.width + (x + 1)] : FLT_MAX;
             
             if (x > 0 && up_left < up && up_left <= up_right) {
                 seam[y] = x - 1;  // Go up-left
-            } else if (x < width - 1 && up_right < up && up_right <= up_left) {
+            } else if (x < dp.width - 1 && up_right < up && up_right <= up_left) {
                 seam[y] = x + 1;  // Go up-right
             }
         }
-    } catch (const std::exception& e) {
-        std::cerr << "Error in computeSeamCUDA: " << e.what() << std::endl;
+    }
+}
+
+// Optimized CUDA implementation of seam removal
+void removeSeamCUDA(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& seam) {
+    if (!cuda_initialized) {
+        // Fall back to CPU implementation
+        remove_seam(img, lum, grad, seam);
+        return;
+    }
+    
+    try {
+        int width = img.width;
+        int height = img.height;
+        int new_width = width - 1;
+        
+        // Allocate device memory for output buffers
+        d_output_image.allocate(new_width * height);
+        d_output_lum.allocate(new_width * height);
+        d_output_energy.allocate(new_width * height);
+        d_seam.allocate(height);
+        
+        // Copy seam data to device
+        d_seam.copyToDevice(seam.data(), height);
+        
+        // Copy input data to device if not already there
+        d_image.copyToDevice(img.pixels.data(), width * height);
+        d_luminance.copyToDevice(lum.items.data(), width * height);
+        d_energy.copyToDevice(grad.items.data(), width * height);
+        
+        // Execute CUDA kernels in parallel streams to overlap computation
+        cudaStream_t stream1, stream2, stream3;
+        cudaStreamCreate(&stream1);
+        cudaStreamCreate(&stream2);
+        cudaStreamCreate(&stream3);
+        
+        // Remove seam from image
+        cuda_removeSeamKernel(d_image.get(), d_output_image.get(), d_seam.get(), width, height);
+        
+        // Remove seam from luminance matrix
+        removeSeamFromMatrixCUDA(d_luminance.get(), d_output_lum.get(), d_seam.get(), width, height);
+        
+        // Remove seam from energy matrix
+        removeSeamFromMatrixCUDA(d_energy.get(), d_output_energy.get(), d_seam.get(), width, height);
+        
+        // Copy results back to host
+        d_output_image.copyToHost(img.pixels.data(), new_width * height);
+        d_output_lum.copyToHost(lum.items.data(), new_width * height);
+        d_output_energy.copyToHost(grad.items.data(), new_width * height);
+        
+        // Update dimensions
+        --img.width;
+        --lum.width;
+        --grad.width;
+        img.stride = img.width;
+        lum.stride = lum.width;
+        grad.stride = grad.width;
+        
+        // Clean up streams
+        cudaStreamDestroy(stream1);
+        cudaStreamDestroy(stream2);
+        cudaStreamDestroy(stream3);
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Error in removeSeamCUDA: " << e.what() << std::endl;
+        // Fall back to CPU implementation
+        remove_seam(img, lum, grad, seam);
+    }
+}
+
+// Optimized CUDA implementation of gradient update after seam removal
+void updateGradientCUDA(Matrix& grad, const Matrix& lum, const std::vector<int>& seam) {
+    if (!cuda_initialized) {
+        // Fall back to CPU implementation
+        update_gradient(grad, lum, seam);
+        return;
+    }
+    
+    try {
+        int width = grad.width;
+        int height = grad.height;
+        
+        // Copy data to device
+        d_luminance.copyToDevice(lum.items.data(), width * height);
+        d_energy.copyToDevice(grad.items.data(), width * height);
+        d_seam.copyToDevice(seam.data(), height);
+        
+        // Execute CUDA kernel
+        ::updateGradientCUDA(d_energy.get(), d_luminance.get(), d_seam.get(), width, height);
+        
+        // Copy updated gradient back to host
+        d_energy.copyToHost(grad.items.data(), width * height);
+    }
+    catch (const std::exception& e) {
+        std::cerr << "Error in updateGradientCUDA: " << e.what() << std::endl;
+        // Fall back to CPU implementation
+        update_gradient(grad, lum, seam);
     }
 }
 
@@ -303,6 +439,12 @@ void cleanupCUDA() {
         d_luminance.free();
         d_energy.free();
         d_dp.free();
+        d_output_image.free();
+        d_seam.free();
+        d_forward_energy.free();
+        d_backward_energy.free();
+        d_output_lum.free();
+        d_output_energy.free();
     } catch (const std::exception& e) {
         std::cerr << "Error cleaning up CUDA resources: " << e.what() << std::endl;
     }
@@ -311,8 +453,55 @@ void cleanupCUDA() {
 }
 
 void saveVisualizationsCUDA(const Image& img, const Matrix& lum, const Matrix& energy, const Matrix& dp, 
-                           const std::vector<int>& seam, int stage) {
-    visualization::saveStageVisualizations(img, lum, energy, dp, seam, stage);
+                           const std::vector<int>& seam, int stage, bool detailed_viz) {
+    visualization::saveStageVisualizations(img, lum, energy, dp, seam, stage, detailed_viz);
+}
+
+// GPU-accelerated visualization of the seam on the image
+void visualizeSeamRemovalCUDA(const Image& img, const std::vector<int>& seam, const std::string& filename) {
+    static int frame_counter = 0;
+    frame_counter++;
+    
+    // Only update every 10th frame to reduce disk I/O and improve performance
+    if (frame_counter % 10 != 0) {
+        return;
+    }
+    
+    if (!cuda_initialized) {
+        // Fall back to CPU implementation if CUDA is not available
+        visualization::visualizeSeamRemoval(img, seam, filename);
+        return;
+    }
+    
+    try {
+        int width = img.width;
+        int height = img.height;
+        
+        // Allocate device memory for image, seam, and output
+        d_image.allocate(width * height);
+        d_seam.allocate(height);
+        d_output_image.allocate(width * height);
+        
+        // Copy data to device
+        d_image.copyToDevice(img.pixels.data(), width * height);
+        d_seam.copyToDevice(seam.data(), height);
+        
+        // Execute CUDA kernel to visualize seam
+        ::visualizeSeamCUDA(d_image.get(), d_output_image.get(), d_seam.get(), width, height);
+        
+        // Copy result back to host
+        std::vector<uint32_t> output_pixels(width * height);
+        d_output_image.copyToHost(output_pixels.data(), width * height);
+        
+        // Save the image to disk
+        if (!stbi_write_png(filename.c_str(), width, height, 4, output_pixels.data(), width * sizeof(uint32_t))) {
+            std::cerr << "ERROR: could not save visualization to " << filename << std::endl;
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "Error in visualizeSeamRemovalCUDA: " << e.what() << std::endl;
+        // Fall back to CPU implementation
+        visualization::visualizeSeamRemoval(img, seam, filename);
+    }
 }
 
 } // namespace seam_carving_cuda 

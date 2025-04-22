@@ -81,5 +81,6 @@
         "xstring": "cpp",
         "xtr1common": "cpp",
         "xutility": "cpp"
-    }
+    },
+    "cmake.sourceDirectory": "D:/Project/seam-carving2/cuda"
 }

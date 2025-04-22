@@ -107,7 +107,8 @@ void saveStageVisualizations(
     const Matrix& energy,
     const Matrix& dp,
     const std::vector<int>& seam,
-    int stage
+    int stage,
+    bool detailed_viz
 ) {
     // Create output directory if it doesn't exist
     std::string dir = "output";
@@ -129,42 +130,102 @@ void saveStageVisualizations(
     if (stage < 10) prefix = dir + "/stage_00" + std::to_string(stage);
     else if (stage < 100) prefix = dir + "/stage_0" + std::to_string(stage);
     
-    std::cout << "Saving visualizations to: " << prefix << "_*.png" << std::endl;
+    std::cout << "Saving stage " << stage << " visualization" << (detailed_viz ? " (detailed)" : "") << std::endl;
     
-    // Save all visualizations
-    matrixToGrayscaleImage(lum, prefix + "_grayscale.png");
-    energyToHeatmap(energy, prefix + "_energy.png");
-    matrixToGrayscaleImage(dp, prefix + "_dp.png");
+    // Always save the current image with seam
     visualizeSeam(img, seam, prefix + "_seam.png");
     
-    // Save current resized image
-    stbi_write_png((prefix + "_image.png").c_str(), img.width, img.height, 
-                  4, img.pixels.data(), img.stride * sizeof(uint32_t));
-                  
-    // Create a log file with information
-    std::ofstream log(prefix + "_info.txt");
-    log << "Stage: " << stage << std::endl;
-    log << "Image dimensions: " << img.width << " x " << img.height << std::endl;
-    log << "Energy stats: " << std::endl;
+    // Only save detailed visualizations if requested
+    if (detailed_viz) {
+        // Save detailed visualizations in parallel if OpenMP is available
+        #pragma omp parallel sections
+        {
+            #pragma omp section
+            {
+                matrixToGrayscaleImage(lum, prefix + "_grayscale.png");
+            }
+            
+            #pragma omp section
+            {
+                energyToHeatmap(energy, prefix + "_energy.png");
+            }
+            
+            #pragma omp section
+            {
+                matrixToGrayscaleImage(dp, prefix + "_dp.png");
+            }
+            
+            #pragma omp section
+            {
+                // Save current resized image
+                stbi_write_png((prefix + "_image.png").c_str(), img.width, img.height, 
+                              4, img.pixels.data(), img.stride * sizeof(uint32_t));
+            }
+        }
+        
+        // Create a log file with information
+        std::ofstream log(prefix + "_info.txt");
+        log << "Stage: " << stage << std::endl;
+        log << "Image dimensions: " << img.width << " x " << img.height << std::endl;
+        log << "Energy stats: " << std::endl;
+        
+        // Calculate energy stats
+        float min_energy = energy.items[0];
+        float max_energy = energy.items[0];
+        float avg_energy = 0.0f;
+        
+        for (int i = 0; i < energy.width * energy.height; ++i) {
+            min_energy = std::min(min_energy, energy.items[i]);
+            max_energy = std::max(max_energy, energy.items[i]);
+            avg_energy += energy.items[i];
+        }
+        
+        avg_energy /= (energy.width * energy.height);
+        
+        log << "  Min: " << min_energy << std::endl;
+        log << "  Max: " << max_energy << std::endl;
+        log << "  Avg: " << avg_energy << std::endl;
+        
+        log.close();
+    }
+}
+
+// Update a single output.png file showing the current image with the most recently removed seam
+void visualizeSeamRemoval(const Image& img, const std::vector<int>& seam, const std::string& filename) {
+    static int frame_counter = 0;
+    frame_counter++;
     
-    // Calculate energy stats
-    float min_energy = energy.items[0];
-    float max_energy = energy.items[0];
-    float avg_energy = 0.0f;
-    
-    for (int i = 0; i < energy.width * energy.height; ++i) {
-        min_energy = std::min(min_energy, energy.items[i]);
-        max_energy = std::max(max_energy, energy.items[i]);
-        avg_energy += energy.items[i];
+    // Only update every 10th frame to reduce disk I/O and improve performance
+    if (frame_counter % 10 != 0) {
+        return;
     }
     
-    avg_energy /= (energy.width * energy.height);
+    int width = img.width;
+    int height = img.height;
     
-    log << "  Min: " << min_energy << std::endl;
-    log << "  Max: " << max_energy << std::endl;
-    log << "  Avg: " << avg_energy << std::endl;
+    std::vector<uint32_t> pixels(width * height);
     
-    log.close();
+    // Copy the original image with optimized memory access pattern
+    #pragma omp parallel for
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            pixels[y * width + x] = img.at(y, x);
+        }
+    }
+    
+    // Highlight the seam in red (bright, easy to see)
+    #pragma omp parallel for
+    for (int y = 0; y < height; ++y) {
+        int x = seam[y];
+        if (x >= 0 && x < width) {
+            pixels[y * width + x] = 0xFFFF0000;  // Bright red
+        }
+    }
+    
+    // Save image, overwriting the previous version
+    if (!stbi_write_png(filename.c_str(), width, height, 4, pixels.data(), width * sizeof(uint32_t))) {
+        std::cerr << "ERROR: could not save visualization to " << filename << std::endl;
+    }
 }
 
 } // namespace visualization 

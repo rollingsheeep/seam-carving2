@@ -3,6 +3,7 @@
 #include "data_structures.h"
 #include <vector>
 #include <cstdint>
+#include <string>
 
 namespace seam_carving_cuda {
 
@@ -21,6 +22,8 @@ void computeForwardEnergyCUDA(Matrix& energy, const Matrix& lum);
 void computeHybridEnergyCUDA(Matrix& energy, const Matrix& lum);
 void computeDynamicProgrammingCUDA(Matrix& dp, const Matrix& energy);
 void computeSeamCUDA(std::vector<int>& seam, const Matrix& dp);
+void removeSeamCUDA(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& seam);
+void updateGradientCUDA(Matrix& grad, const Matrix& lum, const std::vector<int>& seam);
 
 // Cleanup CUDA resources
 void cleanupCUDA();
@@ -29,6 +32,9 @@ void cleanupCUDA();
 bool isCUDAAvailable();
 
 // Visualization helpers
-void saveVisualizationsCUDA(const Image& img, const Matrix& lum, const Matrix& energy, const Matrix& dp, const std::vector<int>& seam, int stage);
+void saveVisualizationsCUDA(const Image& img, const Matrix& lum, const Matrix& energy, const Matrix& dp, const std::vector<int>& seam, int stage, bool detailed_viz = false);
+
+// GPU-accelerated visualization of the seam on the image
+void visualizeSeamRemovalCUDA(const Image& img, const std::vector<int>& seam, const std::string& filename);
 
 } // namespace seam_carving_cuda 

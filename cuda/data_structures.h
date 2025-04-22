@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 // Image class definition
 class Image {
@@ -142,9 +143,86 @@ inline void compute_forward_energy(const Matrix& lum, Matrix& energy) {
 }
 
 // Simple hybrid energy selection
-inline void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
-    // In this simplified version, just use Sobel filter (backward energy)
-    compute_sobel_filter(lum, energy);
+inline void compute_hybrid_energy(const Matrix& lum, Matrix& energy, float* backward_weight = nullptr, float* forward_weight = nullptr) {
+    // Compute both backward and forward energy
+    Matrix forwardEnergy(lum.width, lum.height);
+    Matrix backwardEnergy(lum.width, lum.height);
+    
+    compute_sobel_filter(lum, backwardEnergy);
+    compute_forward_energy(lum, forwardEnergy);
+    
+    // Find statistics for normalization
+    float min_backward = std::numeric_limits<float>::max();
+    float max_backward = -std::numeric_limits<float>::max();
+    float min_forward = std::numeric_limits<float>::max();
+    float max_forward = -std::numeric_limits<float>::max();
+    
+    // Find min/max values for both energy types
+    for (int y = 0; y < lum.height; ++y) {
+        for (int x = 0; x < lum.width; ++x) {
+            min_backward = std::min(min_backward, backwardEnergy.at(y, x));
+            max_backward = std::max(max_backward, backwardEnergy.at(y, x));
+            min_forward = std::min(min_forward, forwardEnergy.at(y, x));
+            max_forward = std::max(max_forward, forwardEnergy.at(y, x));
+        }
+    }
+    
+    // Create normalized energy matrices
+    Matrix norm_backward(lum.width, lum.height);
+    Matrix norm_forward(lum.width, lum.height);
+    
+    // Normalize to [0, 1] range
+    float backward_range = max_backward - min_backward;
+    float forward_range = max_forward - min_forward;
+    
+    for (int y = 0; y < lum.height; ++y) {
+        for (int x = 0; x < lum.width; ++x) {
+            // Avoid division by zero
+            if (backward_range > 0.0001f) {
+                norm_backward.at(y, x) = (backwardEnergy.at(y, x) - min_backward) / backward_range;
+            } else {
+                norm_backward.at(y, x) = backwardEnergy.at(y, x);
+            }
+            
+            if (forward_range > 0.0001f) {
+                norm_forward.at(y, x) = (forwardEnergy.at(y, x) - min_forward) / forward_range;
+            } else {
+                norm_forward.at(y, x) = forwardEnergy.at(y, x);
+            }
+        }
+    }
+    
+    // Accumulate weights for reporting
+    float total_backward_weight = 0.0f;
+    float total_forward_weight = 0.0f;
+    
+    // Blend the normalized energies using the same threshold as in CUDA
+    float gradient_threshold = 0.3f;
+    
+    for (int y = 0; y < lum.height; ++y) {
+        for (int x = 0; x < lum.width; ++x) {
+            float gradient = norm_backward.at(y, x);
+            float mixFactor = std::min(1.0f, gradient / gradient_threshold);
+            
+            float backwardWeight = 1.0f - mixFactor;
+            float forwardWeight = mixFactor;
+            
+            total_backward_weight += backwardWeight;
+            total_forward_weight += forwardWeight;
+            
+            energy.at(y, x) = backwardWeight * norm_backward.at(y, x) + 
+                             forwardWeight * norm_forward.at(y, x);
+        }
+    }
+    
+    // If pointers are provided, write back the accumulated weights
+    if (backward_weight) {
+        *backward_weight = total_backward_weight;
+    }
+    
+    if (forward_weight) {
+        *forward_weight = total_forward_weight;
+    }
 }
 
 // Compute dynamic programming for seam finding

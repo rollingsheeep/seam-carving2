@@ -18,6 +18,9 @@ set(CUDA_SOURCES
     luminance_kernel.cu
     energy_kernels.cu
     dp_kernel.cu
+    visualization_kernel.cu
+    seam_kernel.cu
+    hybrid_energy_kernel.cu
 )
 
 set(CXX_SOURCES

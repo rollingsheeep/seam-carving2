@@ -30,7 +30,15 @@ void saveStageVisualizations(
     const Matrix& energy,
     const Matrix& dp,
     const std::vector<int>& seam,
-    int stage
+    int stage,
+    bool detailed_viz = false
+);
+
+// Update a single output.png file showing the current image with the most recently removed seam
+void visualizeSeamRemoval(
+    const Image& img,
+    const std::vector<int>& seam,
+    const std::string& filename = "output.png"
 );
 
 } // namespace visualization 
