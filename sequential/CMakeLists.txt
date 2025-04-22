@@ -25,11 +25,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     endif()
 endif()
 
-# Set output directory
-set_target_properties(seam_carving_sequential PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-)
-
 # Install target
 install(TARGETS seam_carving_sequential
     RUNTIME DESTINATION bin

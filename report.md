@@ -116,7 +116,7 @@ Total execution time: 62132 ms
 
 
 # MPI
-seam_carving_mpi.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_mpi.jpg --energy hybrid
+mpiexec -n 4 seam_carving_mpi.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_mpi.jpg --energy hybrid
 
 Using MPI implementation with 1 processes
 Image loading time: 19 ms
@@ -149,4 +149,33 @@ Image saving time: 140 ms
 OK: generated ..\..\..\output\surfer_mpi.jpg
 Total execution time: 49760 ms
 
-D:\Project\seam-carving2\mpi\build\Release>
+Using MPI implementation with 4 processes
+Image loading time: 26 ms
+Luminance computation time: 4 ms
+Using hybrid energy calculation
+Initial energy computation time: 48 ms
+Removing 1280 seams...
+Progress: 10% complete
+Progress: 20% complete
+Progress: 30% complete
+Progress: 40% complete
+Progress: 50% complete
+Progress: 60% complete
+Progress: 70% complete
+Progress: 80% complete
+Progress: 90% complete
+Progress: 100% complete
+Seam removal breakdown:
+  Dynamic programming: 3795.19 ms
+  Seam computation: 19.587 ms
+  Seam removal: 11199.4 ms
+  Energy update: 18608.4 ms
+  Total seam removal time: 42518 ms
+
+Hybrid energy summary:
+  Backward energy usage: 50.04%
+  Forward energy usage: 49.96%
+  Ratio (Backward:Forward): 1.00:1
+Image saving time: 133 ms
+OK: generated ..\..\..\output\surfer_mpi.jpg
+Total execution time: 42754 ms

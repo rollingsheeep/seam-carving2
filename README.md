@@ -1,6 +1,6 @@
 # Seam Carving Implementation
 
-This is a C++ implementation of the seam carving algorithm for content-aware image resizing, based on the paper "Seam Carving for Content-Aware Image Resizing" by Shai Avidan and Ariel Shamir. The implementation includes sequential, OpenMP, and CUDA versions for performance comparison.
+This is a C++ implementation of the seam carving algorithm for content-aware image resizing, based on the paper "Seam Carving for Content-Aware Image Resizing" by Shai Avidan and Ariel Shamir. The implementation includes four versions: sequential, OpenMP, CUDA, and MPI for performance comparison.
 
 ## Features
 
@@ -9,17 +9,17 @@ This is a C++ implementation of the seam carving algorithm for content-aware ima
   - Forward energy (as described in "Improved Seam Carving for Video Retargeting")
   - Backward energy (classic Sobel filter approach)
   - Hybrid energy (dynamic selection between forward and backward)
-- Three implementation approaches:
+- Four implementation approaches:
   - Sequential (single-threaded)
   - OpenMP (CPU multi-threading)
   - CUDA (GPU acceleration)
+  - MPI (distributed computing)
 - Performance benchmarking and comparison
 
 ## Project Structure
 
 ```
 .
-├── main.cpp                # Main launcher
 ├── sequential/             # Sequential implementation
 │   ├── sequential_impl.cpp # Sequential implementation code
 │   └── CMakeLists.txt      # CMake build script for sequential version
@@ -30,20 +30,64 @@ This is a C++ implementation of the seam carving algorithm for content-aware ima
 │   ├── seam_carving_cuda.cpp    # CUDA implementation code
 │   ├── *.cu                     # CUDA kernel files
 │   └── CMakeLists.txt           # CMake build script for CUDA version
+├── mpi/                    # MPI implementation
+│   ├── mpi_impl.cpp        # MPI implementation code
+│   └── CMakeLists.txt      # CMake build script for MPI version
 ├── stb_image.h             # Image loading library
 ├── stb_image_write.h       # Image writing library
-├── CMakeLists.txt          # Main CMake build script
-├── build.bat               # Windows build script
-├── build.sh                # Unix build script
 ├── images/                 # Test images directory
 └── output/                 # Output directory for processed images
 ```
 
+## Prerequisites
+
+Depending on which version you want to build, you'll need to install different tools:
+
+1. **For all versions:**
+   - CMake 3.10 or higher
+   - Visual Studio 2022 or another C++ compiler with C++14 support
+
+2. **For OpenMP version:**
+   - A compiler with OpenMP support (most modern C++ compilers include this)
+
+3. **For CUDA version:**
+   - NVIDIA CUDA Toolkit 11.0 or higher
+   - NVIDIA GPU with compute capability 5.0 or higher
+
+4. **For MPI version:**
+   - Microsoft MPI (MS-MPI) or another MPI implementation
+   - MS-MPI can be downloaded from the Microsoft website
+
 ## Building
 
-### Using CMake
+### Building with Visual Studio
+
+For each implementation (sequential, openmp, cuda, mpi), follow these steps:
 
 ```bash
+# Navigate to the specific implementation directory
+cd D:\Project\seam-carving2\{sequential|openmp|cuda|mpi}
+
+# Create a build directory
+mkdir build
+cd build
+
+# Configure the project with CMake for Visual Studio
+cmake -G "Visual Studio 17 2022" -A x64 ..
+```
+
+After running these commands:
+1. Open the generated `.sln` file in Visual Studio
+2. Select the "Release" configuration
+3. Build the solution (F7 or Build → Build Solution)
+4. The executable will be created in the `build\Release` folder
+
+### Building with Other Compilers
+
+```bash
+# Navigate to the specific implementation directory
+cd {sequential|openmp|cuda|mpi}
+
 # Create a build directory
 mkdir build
 cd build
@@ -55,97 +99,98 @@ cmake ..
 cmake --build . --config Release
 ```
 
-### Manual Build using UCRT64
+## Running the Programs
+
+After building, you can run each implementation with the following commands:
+
+### Sequential Version
 
 ```bash
-# Windows (MinGW)
-cd d:/project/seam-carving2
-## for seam_carving(self)
-g++ seam_carving.cpp -o seam_carving -I/ucrt64/include/opencv4 -L/ucrt64/lib -lopencv_imgcodecs -lopencv_imgproc -lopencv_highgui -lopencv_core -std=c++17
-## for main(github)
-g++ main.cpp -o main.exe -std=c++17
+cd D:\Project\seam-carving2\sequential\build\Release
+seam_carving_sequential.exe <input_image> <output_image> [--energy <forward|backward|hybrid>]
 ```
 
-## Usage
+### OpenMP Version
 
-The program supports two main modes: resize and object removal.
-
-### Command Line Arguments
-
-```
-seam_carving [options]
-Options:
-  -resize              Resize image (requires -dx and/or -dy)
-  -remove              Remove object (requires -mask)
-  -im <filename>       Input image file
-  -out <filename>      Output image file
-  -dx <value>          Width change (positive to enlarge, negative to reduce)
-  -dy <value>          Height change (positive to enlarge, negative to reduce)
-  -target_width <value> Target width in pixels (alternative to -dx)
-  -target_height <value> Target height in pixels (alternative to -dy)
-  -mask <filename>     Mask file for object removal or protection
-  -vis                 Visualize seams during processing
-  -help                Show help message
-```
-
-### Examples
-
-1. Reduce width by 100 pixels:
 ```bash
-./seam_carving -resize -im images/example.jpg -out output/resized.jpg -dx -100
+cd D:\Project\seam-carving2\openmp\build\Release
+seam_carving_openmp.exe <input_image> <output_image> [--energy <forward|backward|hybrid>] [--threads <num_threads>]
 ```
 
-2. Increase height by 50 pixels:
+### CUDA Version
+
 ```bash
-./seam_carving -resize -im images/example.jpg -out output/enlarged.jpg -dy 50
+cd D:\Project\seam-carving2\cuda\build\Release
+seam_carving_cuda.exe <input_image> <output_image> [--energy <forward|backward|hybrid>]
 ```
 
-3. Resize to specific dimensions:
+### MPI Version
+
 ```bash
-./seam_carving -resize -im images/example.jpg -out output/resized.jpg -target_width 800 -target_height 600
-./seam_carving -resize -im images/Lena_512.png -out output/Lena_162.png -target_width 162 -targetheight 512
+cd D:\Project\seam-carving2\mpi\build\Release
+seam_carving_mpi.exe <input_image> <output_image> [--energy <forward|backward|hybrid>]
 ```
 
-4. Remove object using a mask:
+For MPI with multiple processes:
+
 ```bash
-./seam_carving -remove -im images/example.jpg -out output/removed.jpg -mask images/mask.png
+mpiexec -n <num_processes> seam_carving_mpi.exe <input_image> <output_image> [--energy <forward|backward|hybrid>]
 ```
 
-5. Resize with protective mask:
+## Examples
+
+Here are some example commands for each implementation:
+
 ```bash
-./seam_carving -resize -im images/example.jpg -out output/protected.jpg -dx -100 -mask images/protect.png
+# Sequential version with hybrid energy
+seam_carving_sequential.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_sequential.jpg --energy hybrid
+
+# OpenMP version with 4 threads
+seam_carving_openmp.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_omp.jpg --energy hybrid --threads 4
+
+# CUDA version
+seam_carving_cuda.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_cuda.jpg --energy hybrid
+
+# MPI version with 4 processes
+mpiexec -n 4 seam_carving_mpi.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_mpi.jpg --energy hybrid
 ```
 
-### Examples
+## Command Line Arguments
 
-5. Resize image:
-```bash
-./main.exe images/Lena_512.png output/Lena_162.png --energy forward
-```
+- `<input_image>`: Path to the input image file
+- `<output_image>`: Path where the output image will be saved
+- `--energy <type>`: Energy calculation method
+  - `forward`: Uses forward energy calculation
+  - `backward`: Uses backward energy calculation (Sobel filter)
+  - `hybrid`: Adaptively selects between forward and backward energy (default)
+- `--threads <num>`: Number of threads to use (OpenMP version only)
 
 ## Implementation Details
 
-The implementation uses forward energy by default, which typically produces better results than backward energy. The algorithm processes seams individually rather than in batches to maintain image quality.
+The seam carving algorithm is implemented in four different ways to showcase different parallel computing paradigms:
 
-Key features of the implementation:
+1. **Sequential**: A baseline single-threaded implementation
+2. **OpenMP**: Shared-memory parallelism using CPU threads
+3. **CUDA**: Massively parallel GPU implementation
+4. **MPI**: Distributed-memory parallelism for multi-node execution
 
-- Forward energy calculation for better seam selection
-- Efficient seam tracking and removal
-- Improved blending for seam insertion
-- Batch processing for large size changes
-- Progress visualization support
+Each implementation follows the same basic algorithm:
+1. Convert image to luminance
+2. Calculate energy (forward, backward, or hybrid)
+3. Use dynamic programming to find minimum energy paths
+4. Remove seams with minimum energy
+5. Update energy after each seam removal
 
-## Performance Considerations
+## Performance Comparison
 
-- Large images are processed in batches to maintain memory efficiency
-- Forward energy calculation is used by default for better quality
-- Visualization may slow down processing but is useful for debugging
+Different implementations have different strengths:
 
-## Known Limitations
+- **Sequential**: Simple baseline, works on any system
+- **OpenMP**: Good speedup on multi-core systems, relatively simple implementation
+- **CUDA**: Excels at energy computation but struggles with dynamic programming steps
+- **MPI**: Suitable for very large images across multiple compute nodes
 
-- Very large size changes might affect image quality
-- Processing time increases with image size and number of seams
-- Memory usage scales with image dimensions
+For detailed performance analysis, see `performance_analysis.md`.
 
 ## License
 
