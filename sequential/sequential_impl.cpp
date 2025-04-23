@@ -65,6 +65,7 @@ float rgb_to_lum(uint32_t rgb) {
     return 0.2126f*r + 0.7152f*g + 0.0722f*b;
 }
 
+// Converts each pixel in the image to its luminance value
 void compute_luminance(const Image& img, Matrix& lum) {
     assert(img.width == lum.width && img.height == lum.height);
     for (int y = 0; y < lum.height; ++y) {
@@ -74,6 +75,7 @@ void compute_luminance(const Image& img, Matrix& lum) {
     }
 }
 
+// Applies Sobel edge detection filter at a specific pixel to detect edges
 float sobel_filter_at(const Matrix& mat, int cx, int cy) {
     static const float gx[3][3] = {
         {1.0f, 0.0f, -1.0f},
@@ -101,6 +103,7 @@ float sobel_filter_at(const Matrix& mat, int cx, int cy) {
     return std::sqrt(sx*sx + sy*sy);
 }
 
+// Applies Sobel filter to the entire image to create energy gradient map
 void compute_sobel_filter(const Matrix& mat, Matrix& grad) {
     assert(mat.width == grad.width && mat.height == grad.height);
     for (int y = 0; y < mat.height; ++y) {
@@ -110,6 +113,7 @@ void compute_sobel_filter(const Matrix& mat, Matrix& grad) {
     }
 }
 
+// Uses dynamic programming to compute cumulative energy matrix
 void compute_dynamic_programming(const Matrix& grad, Matrix& dp) {
     assert(grad.width == dp.width && grad.height == dp.height);
 
@@ -133,6 +137,7 @@ void compute_dynamic_programming(const Matrix& grad, Matrix& dp) {
     }
 }
 
+// Computes the minimum energy vertical seam path through the image
 void compute_seam(const Matrix& dp, std::vector<int>& seam) {
     seam.resize(dp.height);
     
@@ -164,6 +169,7 @@ void compute_seam(const Matrix& dp, std::vector<int>& seam) {
     }
 }
 
+// Removes a seam from the image and updates relevant matrices
 void remove_seam(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& seam) {
     std::vector<uint32_t> new_pixels((img.width - 1) * img.height);
     std::vector<float> new_lum((img.width - 1) * img.height);
@@ -197,6 +203,7 @@ void remove_seam(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& 
     grad.items = std::move(new_grad);
 }
 
+// Updates gradient values for pixels adjacent to the removed seam
 void update_gradient(Matrix& grad, const Matrix& lum, const std::vector<int>& seam) {
     // Only update the gradient for pixels adjacent to the removed seam
     for (int y = 0; y < grad.height; ++y) {
@@ -211,8 +218,7 @@ void update_gradient(Matrix& grad, const Matrix& lum, const std::vector<int>& se
     }
 }
 
-// Forward energy calculation as described in "Improved Seam Carving for Video Retargeting"
-// by Rubinstein, Shamir, Avidan
+// Calculates forward energy as described in "Improved Seam Carving for Video Retargeting"
 void compute_forward_energy(const Matrix& lum, Matrix& energy) {
     assert(lum.width == energy.width && lum.height == energy.height);
     int w = lum.width;
@@ -257,7 +263,7 @@ void compute_forward_energy(const Matrix& lum, Matrix& energy) {
 int hybrid_forward_count = 0;
 int hybrid_backward_count = 0;
 
-// Hybrid energy calculation that dynamically chooses between forward and backward energy
+// Dynamically chooses between forward and backward energy based on image characteristics
 void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     assert(lum.width == energy.width && lum.height == energy.height);
 
@@ -374,11 +380,13 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     }
 }
 
+// Displays usage information and command-line options
 void print_usage(const char* program) {
     std::cerr << "Usage: " << program << " <input> <output> [--energy <forward|backward|hybrid>]\n";
     std::cerr << "  --energy: Choose energy calculation method (default: hybrid)\n";
 }
 
+// Main function that orchestrates the seam carving process
 int main(int argc, char** argv) {
     // Start timing
     auto start_time = std::chrono::high_resolution_clock::now();
