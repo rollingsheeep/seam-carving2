@@ -1,3 +1,4 @@
+#include "seam_carving_cuda.h"
 #include "seam_carving_cuda.cuh"
 #include "data_structures.h"  // Use our new header instead of main.cpp
 #include "cuda_utils.h"

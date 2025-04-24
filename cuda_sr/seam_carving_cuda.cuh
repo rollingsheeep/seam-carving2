@@ -3,8 +3,6 @@
 #include <cuda_runtime.h>
 #include <cstdint>
 #include <vector>
-#include <string>
-#include "data_structures.h"
 
 namespace seam_carving_cuda {
 
@@ -38,15 +36,3 @@ void updateGradientCUDA(float* d_gradient, const float* d_luminance,
                       const int* d_seam, int width, int height);
 
 } // namespace seam_carving_cuda
-
-// Functions from seam_carving_cuda.cpp
-// Initialize CUDA and print device information
-void initCUDA();
-// Cleanup CUDA resources
-void cleanupCUDA();
-// Returns true if CUDA is available and initialized
-bool isCUDAAvailable();
-// Copy data between host and device
-void copyImageToDevice(const Image& img);
-void copyMatrixToDevice(const Matrix& mat, const char* name);
-void copyMatrixFromDevice(Matrix& mat, const char* name);
