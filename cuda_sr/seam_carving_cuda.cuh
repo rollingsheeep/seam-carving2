@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace seam_carving_cuda {
+namespace seam_carving_cuda_kernels {
 
 // Functions from dp_kernel.cu
 void computeDynamicProgrammingCUDA(const float* energy_data, float* dp_data, int width, int height);
@@ -35,4 +35,4 @@ void removeSeamFromMatrixCUDA(const float* d_input_matrix, float* d_output_matri
 void updateGradientCUDA(float* d_gradient, const float* d_luminance,
                       const int* d_seam, int width, int height);
 
-} // namespace seam_carving_cuda
+} // namespace seam_carving_cuda_kernels

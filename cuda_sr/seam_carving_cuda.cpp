@@ -104,7 +104,7 @@ void computeLuminanceCUDA(Matrix& lum, const Image& img) {
         CUDA_CHECK(cudaMemcpy(d_img, img.pixels.data(), image_size, cudaMemcpyHostToDevice));
         
         // Compute luminance
-        ::computeLuminanceCUDA(d_img, d_lum, width, height);
+        seam_carving_cuda_kernels::computeLuminanceCUDA(d_img, d_lum, width, height);
         
         // Copy result back to host using cudaMemcpy directly
         CUDA_CHECK(cudaMemcpy(lum.items.data(), d_lum, lum_size, cudaMemcpyDeviceToHost));
@@ -135,7 +135,7 @@ void computeSobelFilterCUDA(Matrix& energy, const Matrix& lum) {
         CUDA_CHECK(cudaMemcpy(d_lum, lum.items.data(), matrix_size, cudaMemcpyHostToDevice));
         
         // Compute Sobel filter
-        ::computeSobelCUDA(d_lum, d_energy, width, height);
+        seam_carving_cuda_kernels::computeSobelCUDA(d_lum, d_energy, width, height);
         
         // Copy result back to host using cudaMemcpy directly
         CUDA_CHECK(cudaMemcpy(energy.items.data(), d_energy, matrix_size, cudaMemcpyDeviceToHost));
@@ -166,7 +166,7 @@ void computeForwardEnergyCUDA(Matrix& energy, const Matrix& lum) {
         CUDA_CHECK(cudaMemcpy(d_lum, lum.items.data(), matrix_size, cudaMemcpyHostToDevice));
         
         // Compute Forward Energy
-        ::computeForwardEnergyCUDA(d_lum, d_energy, width, height);
+        seam_carving_cuda_kernels::computeForwardEnergyCUDA(d_lum, d_energy, width, height);
         
         // Copy result back to host using cudaMemcpy directly
         CUDA_CHECK(cudaMemcpy(energy.items.data(), d_energy, matrix_size, cudaMemcpyDeviceToHost));
@@ -208,9 +208,9 @@ void computeHybridEnergyCUDA(Matrix& energy, const Matrix& lum) {
         float forward_weight = 0.0f;
         
         // Compute hybrid energy directly on GPU
-        ::computeHybridEnergyCUDA(d_luminance.get(), d_energy.get(), 
-                                d_forward_energy.get(), d_backward_energy.get(),
-                                width, height, &backward_weight, &forward_weight);
+        seam_carving_cuda_kernels::computeHybridEnergyCUDA(d_luminance.get(), d_energy.get(), 
+                                                           d_forward_energy.get(), d_backward_energy.get(),
+                                                           width, height, &backward_weight, &forward_weight);
         
         // Copy result back to host
         d_energy.copyToHost(energy.items.data(), width * height);
@@ -298,13 +298,13 @@ void removeSeamCUDA(Image& img, Matrix& lum, Matrix& grad, const std::vector<int
         CUDA_CHECK(cudaMemcpy(d_seam, seam.data(), seam_size, cudaMemcpyHostToDevice));
         
         // Remove seam from image
-        ::cuda_removeSeamKernel(d_input_image, d_output_image, d_seam, width, height);
+        seam_carving_cuda_kernels::cuda_removeSeamKernel(d_input_image, d_output_image, d_seam, width, height);
         
         // Remove seam from luminance matrix
-        ::removeSeamFromMatrixCUDA(d_input_lum, d_output_lum, d_seam, width, height);
+        seam_carving_cuda_kernels::removeSeamFromMatrixCUDA(d_input_lum, d_output_lum, d_seam, width, height);
         
         // Remove seam from gradient matrix
-        ::removeSeamFromMatrixCUDA(d_input_grad, d_output_grad, d_seam, width, height);
+        seam_carving_cuda_kernels::removeSeamFromMatrixCUDA(d_input_grad, d_output_grad, d_seam, width, height);
         
         // Copy results back to host using cudaMemcpy directly
         CUDA_CHECK(cudaMemcpy(img.pixels.data(), d_output_image, new_image_size, cudaMemcpyDeviceToHost));
@@ -354,7 +354,7 @@ void updateGradientCUDA(Matrix& grad, const Matrix& lum, const std::vector<int>&
         CUDA_CHECK(cudaMemcpy(d_seam, seam.data(), seam_size, cudaMemcpyHostToDevice));
         
         // Update gradient
-        ::updateGradientCUDA(d_grad, d_lum, d_seam, width, height);
+        seam_carving_cuda_kernels::updateGradientCUDA(d_grad, d_lum, d_seam, width, height);
         
         // Copy result back to host using cudaMemcpy directly
         CUDA_CHECK(cudaMemcpy(grad.items.data(), d_grad, matrix_size, cudaMemcpyDeviceToHost));
