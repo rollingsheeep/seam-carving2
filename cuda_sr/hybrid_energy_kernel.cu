@@ -2,6 +2,7 @@
 #include <device_launch_parameters.h>
 #include <stdio.h>
 #include <cfloat>  // For FLT_MAX
+#include "seam_carving_cuda.cuh"
 
 // Helper device function for atomic min operation on floats (not available natively in CUDA)
 __device__ void atomicMinFloat(float* address, float val) {
@@ -151,214 +152,216 @@ __global__ void hybridEnergyKernel(const float* luminance, float* hybrid_energy,
     }
 }
 
-extern "C" {
-    // Host function to compute hybrid energy directly on GPU
-    void computeHybridEnergyCUDA(const float* d_luminance, float* d_energy, 
-                               const float* d_forward_energy, const float* d_backward_energy,
-                               int width, int height, float* h_backward_weight, float* h_forward_weight) {
-        // Allocate device memory for weights and statistics
-        float* d_backward_weight;
-        float* d_forward_weight;
-        cudaMalloc(&d_backward_weight, sizeof(float));
-        cudaMalloc(&d_forward_weight, sizeof(float));
-        
-        // Initialize weights to zero
-        cudaMemset(d_backward_weight, 0, sizeof(float));
-        cudaMemset(d_forward_weight, 0, sizeof(float));
-        
-        // Allocate memory for energy statistics
-        float* d_min_backward;
-        float* d_max_backward;
-        float* d_avg_backward;
-        float* d_min_forward;
-        float* d_max_forward;
-        float* d_avg_forward;
-        
-        cudaMalloc(&d_min_backward, sizeof(float));
-        cudaMalloc(&d_max_backward, sizeof(float));
-        cudaMalloc(&d_avg_backward, sizeof(float));
-        cudaMalloc(&d_min_forward, sizeof(float));
-        cudaMalloc(&d_max_forward, sizeof(float));
-        cudaMalloc(&d_avg_forward, sizeof(float));
-        
-        // Initialize statistics
-        float init_min = FLT_MAX;
-        float init_max = -FLT_MAX;
-        float init_avg = 0.0f;
-        
-        cudaMemcpy(d_min_backward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_max_backward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_avg_backward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_min_forward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_max_forward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_avg_forward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
-        
-        // Define block and grid dimensions
-        dim3 block(16, 16);
-        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-        
-        // Calculate shared memory size for stats kernel
-        int shared_mem_size = 6 * sizeof(float); // 6 values: min, max, sum for both energy types
-        
-        // Step 1: Calculate statistics for both energy types
-        energyStatsKernel<<<grid, block, shared_mem_size>>>(
-            d_backward_energy, d_forward_energy,
-            d_min_backward, d_max_backward, d_avg_backward,
-            d_min_forward, d_max_forward, d_avg_forward,
-            width, height
-        );
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in energy stats kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Synchronize to ensure statistics computation is complete
-        cudaDeviceSynchronize();
-        
-        // Copy statistics from device to host
-        float h_min_backward, h_max_backward;
-        float h_min_forward, h_max_forward;
-        
-        cudaMemcpy(&h_min_backward, d_min_backward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(&h_max_backward, d_max_backward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(&h_min_forward, d_min_forward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(&h_max_forward, d_max_forward, sizeof(float), cudaMemcpyDeviceToHost);
-        
-        // Allocate memory for normalized energies
-        float* d_norm_forward_energy;
-        float* d_norm_backward_energy;
-        cudaMalloc(&d_norm_forward_energy, width * height * sizeof(float));
-        cudaMalloc(&d_norm_backward_energy, width * height * sizeof(float));
-        
-        // Copy the original energies to the normalized buffers
-        cudaMemcpy(d_norm_forward_energy, d_forward_energy, width * height * sizeof(float), cudaMemcpyDeviceToDevice);
-        cudaMemcpy(d_norm_backward_energy, d_backward_energy, width * height * sizeof(float), cudaMemcpyDeviceToDevice);
-        
-        // Step 2: Normalize both energy types
-        normalizeEnergiesKernel<<<grid, block>>>(
-            d_norm_forward_energy, d_norm_backward_energy,
-            h_min_forward, h_max_forward,
-            h_min_backward, h_max_backward,
-            width, height
-        );
-        
-        // Check for errors
-        err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in normalize energies kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Synchronize to ensure normalization is complete
-        cudaDeviceSynchronize();
-        
-        // Step 3: Compute hybrid energy using normalized values
-        hybridEnergyKernel<<<grid, block>>>(
-            d_luminance, d_energy, 
-            d_norm_forward_energy, d_norm_backward_energy,
-            width, height, 
-            d_backward_weight, d_forward_weight
-        );
-        
-        // Check for errors
-        err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in hybrid energy kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Copy weights back to host
-        cudaMemcpy(h_backward_weight, d_backward_weight, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_forward_weight, d_forward_weight, sizeof(float), cudaMemcpyDeviceToHost);
-        
-        // Free device memory
-        cudaFree(d_backward_weight);
-        cudaFree(d_forward_weight);
-        cudaFree(d_min_backward);
-        cudaFree(d_max_backward);
-        cudaFree(d_avg_backward);
-        cudaFree(d_min_forward);
-        cudaFree(d_max_forward);
-        cudaFree(d_avg_forward);
-        cudaFree(d_norm_forward_energy);
-        cudaFree(d_norm_backward_energy);
-        
-        // Synchronize
-        cudaDeviceSynchronize();
+namespace seam_carving_cuda {
+
+// Host function to compute hybrid energy directly on GPU
+void computeHybridEnergyCUDA(const float* d_luminance, float* d_energy, 
+                           const float* d_forward_energy, const float* d_backward_energy,
+                           int width, int height, float* h_backward_weight, float* h_forward_weight) {
+    // Allocate device memory for weights and statistics
+    float* d_backward_weight;
+    float* d_forward_weight;
+    cudaMalloc(&d_backward_weight, sizeof(float));
+    cudaMalloc(&d_forward_weight, sizeof(float));
+    
+    // Initialize weights to zero
+    cudaMemset(d_backward_weight, 0, sizeof(float));
+    cudaMemset(d_forward_weight, 0, sizeof(float));
+    
+    // Allocate memory for energy statistics
+    float* d_min_backward;
+    float* d_max_backward;
+    float* d_avg_backward;
+    float* d_min_forward;
+    float* d_max_forward;
+    float* d_avg_forward;
+    
+    cudaMalloc(&d_min_backward, sizeof(float));
+    cudaMalloc(&d_max_backward, sizeof(float));
+    cudaMalloc(&d_avg_backward, sizeof(float));
+    cudaMalloc(&d_min_forward, sizeof(float));
+    cudaMalloc(&d_max_forward, sizeof(float));
+    cudaMalloc(&d_avg_forward, sizeof(float));
+    
+    // Initialize statistics
+    float init_min = FLT_MAX;
+    float init_max = -FLT_MAX;
+    float init_avg = 0.0f;
+    
+    cudaMemcpy(d_min_backward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_max_backward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_avg_backward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_min_forward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_max_forward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_avg_forward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
+    
+    // Define block and grid dimensions
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    
+    // Calculate shared memory size for stats kernel
+    int shared_mem_size = 6 * sizeof(float); // 6 values: min, max, sum for both energy types
+    
+    // Step 1: Calculate statistics for both energy types
+    energyStatsKernel<<<grid, block, shared_mem_size>>>(
+        d_backward_energy, d_forward_energy,
+        d_min_backward, d_max_backward, d_avg_backward,
+        d_min_forward, d_max_forward, d_avg_forward,
+        width, height
+    );
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in energy stats kernel: %s\n", cudaGetErrorString(err));
     }
     
-    // Host function to compute energy statistics on GPU
-    void computeEnergyStatsCUDA(const float* d_backward_energy, const float* d_forward_energy,
-                              float* h_min_backward, float* h_max_backward, float* h_avg_backward,
-                              float* h_min_forward, float* h_max_forward, float* h_avg_forward,
-                              int width, int height) {
-        // Allocate device memory for statistics
-        float* d_min_backward;
-        float* d_max_backward;
-        float* d_avg_backward;
-        float* d_min_forward;
-        float* d_max_forward;
-        float* d_avg_forward;
-        
-        cudaMalloc(&d_min_backward, sizeof(float));
-        cudaMalloc(&d_max_backward, sizeof(float));
-        cudaMalloc(&d_avg_backward, sizeof(float));
-        cudaMalloc(&d_min_forward, sizeof(float));
-        cudaMalloc(&d_max_forward, sizeof(float));
-        cudaMalloc(&d_avg_forward, sizeof(float));
-        
-        // Initialize device memory
-        float init_min = FLT_MAX;
-        float init_max = -FLT_MAX;
-        float init_avg = 0.0f;
-        
-        cudaMemcpy(d_min_backward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_max_backward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_avg_backward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_min_forward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_max_forward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
-        cudaMemcpy(d_avg_forward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
-        
-        // Define block and grid dimensions
-        dim3 block(16, 16);
-        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-        
-        // Calculate shared memory size
-        int shared_mem_size = 6 * sizeof(float); // 6 values: min, max, sum for both energy types
-        
-        // Launch CUDA kernel
-        energyStatsKernel<<<grid, block, shared_mem_size>>>(d_backward_energy, d_forward_energy,
-                                                         d_min_backward, d_max_backward, d_avg_backward,
-                                                         d_min_forward, d_max_forward, d_avg_forward,
-                                                         width, height);
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in energy stats kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Copy results back to host
-        cudaMemcpy(h_min_backward, d_min_backward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_max_backward, d_max_backward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_avg_backward, d_avg_backward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_min_forward, d_min_forward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_max_forward, d_max_forward, sizeof(float), cudaMemcpyDeviceToHost);
-        cudaMemcpy(h_avg_forward, d_avg_forward, sizeof(float), cudaMemcpyDeviceToHost);
-        
-        // Normalize averages
-        *h_avg_backward /= (width * height);
-        *h_avg_forward /= (width * height);
-        
-        // Free device memory
-        cudaFree(d_min_backward);
-        cudaFree(d_max_backward);
-        cudaFree(d_avg_backward);
-        cudaFree(d_min_forward);
-        cudaFree(d_max_forward);
-        cudaFree(d_avg_forward);
-        
-        // Synchronize
-        cudaDeviceSynchronize();
+    // Synchronize to ensure statistics computation is complete
+    cudaDeviceSynchronize();
+    
+    // Copy statistics from device to host
+    float h_min_backward, h_max_backward;
+    float h_min_forward, h_max_forward;
+    
+    cudaMemcpy(&h_min_backward, d_min_backward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_max_backward, d_max_backward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_min_forward, d_min_forward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(&h_max_forward, d_max_forward, sizeof(float), cudaMemcpyDeviceToHost);
+    
+    // Allocate memory for normalized energies
+    float* d_norm_forward_energy;
+    float* d_norm_backward_energy;
+    cudaMalloc(&d_norm_forward_energy, width * height * sizeof(float));
+    cudaMalloc(&d_norm_backward_energy, width * height * sizeof(float));
+    
+    // Copy the original energies to the normalized buffers
+    cudaMemcpy(d_norm_forward_energy, d_forward_energy, width * height * sizeof(float), cudaMemcpyDeviceToDevice);
+    cudaMemcpy(d_norm_backward_energy, d_backward_energy, width * height * sizeof(float), cudaMemcpyDeviceToDevice);
+    
+    // Step 2: Normalize both energy types
+    normalizeEnergiesKernel<<<grid, block>>>(
+        d_norm_forward_energy, d_norm_backward_energy,
+        h_min_forward, h_max_forward,
+        h_min_backward, h_max_backward,
+        width, height
+    );
+    
+    // Check for errors
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in normalize energies kernel: %s\n", cudaGetErrorString(err));
     }
-} 
+    
+    // Synchronize to ensure normalization is complete
+    cudaDeviceSynchronize();
+    
+    // Step 3: Compute hybrid energy using normalized values
+    hybridEnergyKernel<<<grid, block>>>(
+        d_luminance, d_energy, 
+        d_norm_forward_energy, d_norm_backward_energy,
+        width, height, 
+        d_backward_weight, d_forward_weight
+    );
+    
+    // Check for errors
+    err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in hybrid energy kernel: %s\n", cudaGetErrorString(err));
+    }
+    
+    // Copy weights back to host
+    cudaMemcpy(h_backward_weight, d_backward_weight, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_forward_weight, d_forward_weight, sizeof(float), cudaMemcpyDeviceToHost);
+    
+    // Free device memory
+    cudaFree(d_backward_weight);
+    cudaFree(d_forward_weight);
+    cudaFree(d_min_backward);
+    cudaFree(d_max_backward);
+    cudaFree(d_avg_backward);
+    cudaFree(d_min_forward);
+    cudaFree(d_max_forward);
+    cudaFree(d_avg_forward);
+    cudaFree(d_norm_forward_energy);
+    cudaFree(d_norm_backward_energy);
+    
+    // Synchronize
+    cudaDeviceSynchronize();
+}
+
+// Host function to compute energy statistics on GPU
+void computeEnergyStatsCUDA(const float* d_backward_energy, const float* d_forward_energy,
+                          float* h_min_backward, float* h_max_backward, float* h_avg_backward,
+                          float* h_min_forward, float* h_max_forward, float* h_avg_forward,
+                          int width, int height) {
+    // Allocate device memory for statistics
+    float* d_min_backward;
+    float* d_max_backward;
+    float* d_avg_backward;
+    float* d_min_forward;
+    float* d_max_forward;
+    float* d_avg_forward;
+    
+    cudaMalloc(&d_min_backward, sizeof(float));
+    cudaMalloc(&d_max_backward, sizeof(float));
+    cudaMalloc(&d_avg_backward, sizeof(float));
+    cudaMalloc(&d_min_forward, sizeof(float));
+    cudaMalloc(&d_max_forward, sizeof(float));
+    cudaMalloc(&d_avg_forward, sizeof(float));
+    
+    // Initialize device memory
+    float init_min = FLT_MAX;
+    float init_max = -FLT_MAX;
+    float init_avg = 0.0f;
+    
+    cudaMemcpy(d_min_backward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_max_backward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_avg_backward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_min_forward, &init_min, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_max_forward, &init_max, sizeof(float), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_avg_forward, &init_avg, sizeof(float), cudaMemcpyHostToDevice);
+    
+    // Define block and grid dimensions
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    
+    // Calculate shared memory size
+    int shared_mem_size = 6 * sizeof(float); // 6 values: min, max, sum for both energy types
+    
+    // Launch CUDA kernel
+    energyStatsKernel<<<grid, block, shared_mem_size>>>(d_backward_energy, d_forward_energy,
+                                                     d_min_backward, d_max_backward, d_avg_backward,
+                                                     d_min_forward, d_max_forward, d_avg_forward,
+                                                     width, height);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in energy stats kernel: %s\n", cudaGetErrorString(err));
+    }
+    
+    // Copy results back to host
+    cudaMemcpy(h_min_backward, d_min_backward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_max_backward, d_max_backward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_avg_backward, d_avg_backward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_min_forward, d_min_forward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_max_forward, d_max_forward, sizeof(float), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_avg_forward, d_avg_forward, sizeof(float), cudaMemcpyDeviceToHost);
+    
+    // Normalize averages
+    *h_avg_backward /= (width * height);
+    *h_avg_forward /= (width * height);
+    
+    // Free device memory
+    cudaFree(d_min_backward);
+    cudaFree(d_max_backward);
+    cudaFree(d_avg_backward);
+    cudaFree(d_min_forward);
+    cudaFree(d_max_forward);
+    cudaFree(d_avg_forward);
+    
+    // Synchronize
+    cudaDeviceSynchronize();
+}
+
+} // namespace seam_carving_cuda 

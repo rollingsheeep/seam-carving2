@@ -2,6 +2,7 @@
 #include <device_launch_parameters.h>
 #include <cmath>
 #include <stdio.h>
+#include "seam_carving_cuda.cuh"
 
 // CUDA kernel for computing Sobel filter (backward energy)
 __global__ void sobelFilterKernel(const float* luminance, float* energy, int width, int height) {
@@ -82,42 +83,44 @@ __global__ void forwardEnergyKernel(const float* luminance, float* energy, int w
     }
 }
 
-extern "C" {
-    // Host function to compute Sobel filter (backward energy) using CUDA
-    void computeSobelCUDA(const float* lum_data, float* energy_data, int width, int height) {
-        // Define block and grid dimensions
-        dim3 block(16, 16);
-        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-        
-        // Launch CUDA kernel
-        sobelFilterKernel<<<grid, block>>>(lum_data, energy_data, width, height);
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in Sobel kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Synchronize
-        cudaDeviceSynchronize();
+namespace seam_carving_cuda {
+
+// Host function to compute Sobel filter (backward energy) using CUDA
+void computeSobelCUDA(const float* lum_data, float* energy_data, int width, int height) {
+    // Define block and grid dimensions
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    
+    // Launch CUDA kernel
+    sobelFilterKernel<<<grid, block>>>(lum_data, energy_data, width, height);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in Sobel kernel: %s\n", cudaGetErrorString(err));
     }
     
-    // Host function to compute forward energy using CUDA
-    void computeForwardEnergyCUDA(const float* lum_data, float* energy_data, int width, int height) {
-        // Define block and grid dimensions
-        dim3 block(16, 16);
-        dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-        
-        // Launch CUDA kernel
-        forwardEnergyKernel<<<grid, block>>>(lum_data, energy_data, width, height);
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in forward energy kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Synchronize
-        cudaDeviceSynchronize();
+    // Synchronize
+    cudaDeviceSynchronize();
+}
+
+// Host function to compute forward energy using CUDA
+void computeForwardEnergyCUDA(const float* lum_data, float* energy_data, int width, int height) {
+    // Define block and grid dimensions
+    dim3 block(16, 16);
+    dim3 grid((width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    
+    // Launch CUDA kernel
+    forwardEnergyKernel<<<grid, block>>>(lum_data, energy_data, width, height);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in forward energy kernel: %s\n", cudaGetErrorString(err));
     }
-} 
+    
+    // Synchronize
+    cudaDeviceSynchronize();
+}
+
+} // namespace seam_carving_cuda 

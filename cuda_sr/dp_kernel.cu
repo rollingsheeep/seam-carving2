@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdio.h>
 #include <cfloat>
+#include "seam_carving_cuda.cuh"
 
 // Custom atomic minimum function for floats (CUDA doesn't have one built-in)
 __device__ void atomicMinFloat(float* addr, float val, int* idx_addr, int idx) {
@@ -56,8 +57,10 @@ __global__ void computeDPRowKernel(const float* energy, float* dp, int width, in
     }
 }
 
+namespace seam_carving_cuda {
+
 // Host function to compute the full DP matrix using CUDA - safer row-by-row approach
-extern "C" void computeDynamicProgrammingCUDA(const float* energy_data, float* dp_data, int width, int height) {
+void computeDynamicProgrammingCUDA(const float* energy_data, float* dp_data, int width, int height) {
     // Define block and grid dimensions
     dim3 block(256);
     dim3 grid((width + block.x - 1) / block.x);
@@ -94,7 +97,7 @@ __global__ void findMinLastRowKernel(const float* dp, int width, int height, int
 }
 
 // Host function to find the minimum index in the last row
-extern "C" int findMinIndexLastRowCUDA(const float* dp_data, int width, int height) {
+int findMinIndexLastRowCUDA(const float* dp_data, int width, int height) {
     int* d_min_idx;
     float* d_min_val;
     int h_min_idx;
@@ -198,7 +201,7 @@ __global__ void backtrackSeamKernel(const float* dp, int* seam, int width, int h
 }
 
 // Host function to perform parallel seam backtracking
-extern "C" void backtrackSeamCUDA(const float* dp_data, int* seam_data, int width, int height, int min_idx) {
+void backtrackSeamCUDA(const float* dp_data, int* seam_data, int width, int height, int min_idx) {
     // Define block dimensions - we only need one block
     dim3 block(256);
     dim3 grid(1);
@@ -226,4 +229,6 @@ extern "C" void backtrackSeamCUDA(const float* dp_data, int* seam_data, int widt
     
     // Synchronize
     cudaDeviceSynchronize();
-} 
+}
+
+} // namespace seam_carving_cuda 

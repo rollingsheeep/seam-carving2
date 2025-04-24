@@ -1,5 +1,5 @@
 #include "data_structures.h"  // Include our new header file
-#include "seam_carving_cuda.h"
+#include "seam_carving_cuda.cuh"
 #include <chrono>
 #include <iostream>
 #include <string>

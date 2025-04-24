@@ -1,6 +1,7 @@
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
 #include <stdio.h>
+#include "seam_carving_cuda.cuh"
 
 // Robust CUDA kernel to remove seam from image
 __global__ void removeSeamKernel(const uint32_t* input_image, uint32_t* output_image,
@@ -166,95 +167,97 @@ __global__ void updateGradientKernel(float* gradient, const float* luminance,
     }
 }
 
-extern "C" {
-    // Host function to remove seam from image using CUDA
-    void cuda_removeSeamKernel(const uint32_t* d_input_image, uint32_t* d_output_image,
+namespace seam_carving_cuda {
+
+// Host function to remove seam from image using CUDA
+void cuda_removeSeamKernel(const uint32_t* d_input_image, uint32_t* d_output_image,
+                  const int* d_seam, int width, int height) {
+    int new_width = width - 1;
+    
+    // Validate input parameters
+    if (width <= 1) {
+        printf("Error: Invalid width (%d) for seam removal\n", width);
+        return;
+    }
+    
+    // Define block and grid dimensions for 2D parallelism
+    dim3 block(16, 16);
+    dim3 grid((new_width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    
+    // Launch CUDA kernel
+    removeSeamKernel<<<grid, block>>>(d_input_image, d_output_image, d_seam, width, height, new_width);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in removeSeam kernel: %s\n", cudaGetErrorString(err));
+    }
+    
+    // Wait for kernel to complete
+    cudaDeviceSynchronize();
+}
+
+// Host function to remove seam from matrix using CUDA
+void removeSeamFromMatrixCUDA(const float* d_input_matrix, float* d_output_matrix,
+                           const int* d_seam, int width, int height) {
+    int new_width = width - 1;
+    
+    // Validate input parameters
+    if (width <= 1) {
+        printf("Error: Invalid width (%d) for seam removal\n", width);
+        return;
+    }
+    
+    // Define block and grid dimensions for 2D parallelism
+    dim3 block(16, 16);
+    dim3 grid((new_width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
+    
+    // Launch CUDA kernel
+    removeSeamFromMatrixKernel<<<grid, block>>>(d_input_matrix, d_output_matrix, d_seam, width, height, new_width);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in removeSeamFromMatrix kernel: %s\n", cudaGetErrorString(err));
+    }
+    
+    // Wait for kernel to complete
+    cudaDeviceSynchronize();
+}
+
+// Host function to update gradient after seam removal using CUDA
+void updateGradientCUDA(float* d_gradient, const float* d_luminance,
                       const int* d_seam, int width, int height) {
-        int new_width = width - 1;
+    // For efficiency, we launch one thread block per row
+    dim3 block(32);  // 32 threads per block
+    dim3 grid(1, height);  // One block per row
+    
+    // Calculate required shared memory size (3 rows of luminance data)
+    // We need at most (width+2) elements per row to account for boundary conditions
+    int shared_mem_size = 3 * (width + 2) * sizeof(float);
+    
+    // Check for maximum shared memory limit
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, 0);
+    if (shared_mem_size > deviceProp.sharedMemPerBlock) {
+        printf("Warning: Required shared memory (%d bytes) exceeds device limit (%d bytes)\n",
+               shared_mem_size, deviceProp.sharedMemPerBlock);
         
-        // Validate input parameters
-        if (width <= 1) {
-            printf("Error: Invalid width (%d) for seam removal\n", width);
-            return;
-        }
-        
-        // Define block and grid dimensions for 2D parallelism
-        dim3 block(16, 16);
-        dim3 grid((new_width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-        
-        // Launch CUDA kernel
-        removeSeamKernel<<<grid, block>>>(d_input_image, d_output_image, d_seam, width, height, new_width);
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in removeSeam kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Wait for kernel to complete
-        cudaDeviceSynchronize();
+        // Fall back to smaller shared memory size for very large images
+        shared_mem_size = deviceProp.sharedMemPerBlock;
     }
     
-    // Host function to remove seam from matrix using CUDA
-    void removeSeamFromMatrixCUDA(const float* d_input_matrix, float* d_output_matrix,
-                               const int* d_seam, int width, int height) {
-        int new_width = width - 1;
-        
-        // Validate input parameters
-        if (width <= 1) {
-            printf("Error: Invalid width (%d) for seam removal\n", width);
-            return;
-        }
-        
-        // Define block and grid dimensions for 2D parallelism
-        dim3 block(16, 16);
-        dim3 grid((new_width + block.x - 1) / block.x, (height + block.y - 1) / block.y);
-        
-        // Launch CUDA kernel
-        removeSeamFromMatrixKernel<<<grid, block>>>(d_input_matrix, d_output_matrix, d_seam, width, height, new_width);
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in removeSeamFromMatrix kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Wait for kernel to complete
-        cudaDeviceSynchronize();
+    // Launch CUDA kernel
+    updateGradientKernel<<<grid, block, shared_mem_size>>>(d_gradient, d_luminance, d_seam, width, height);
+    
+    // Check for errors
+    cudaError_t err = cudaGetLastError();
+    if (err != cudaSuccess) {
+        printf("CUDA error in updateGradient kernel: %s\n", cudaGetErrorString(err));
     }
     
-    // Host function to update gradient after seam removal using CUDA
-    void updateGradientCUDA(float* d_gradient, const float* d_luminance,
-                          const int* d_seam, int width, int height) {
-        // For efficiency, we launch one thread block per row
-        dim3 block(32);  // 32 threads per block
-        dim3 grid(1, height);  // One block per row
-        
-        // Calculate required shared memory size (3 rows of luminance data)
-        // We need at most (width+2) elements per row to account for boundary conditions
-        int shared_mem_size = 3 * (width + 2) * sizeof(float);
-        
-        // Check for maximum shared memory limit
-        cudaDeviceProp deviceProp;
-        cudaGetDeviceProperties(&deviceProp, 0);
-        if (shared_mem_size > deviceProp.sharedMemPerBlock) {
-            printf("Warning: Required shared memory (%d bytes) exceeds device limit (%d bytes)\n",
-                   shared_mem_size, deviceProp.sharedMemPerBlock);
-            
-            // Fall back to smaller shared memory size for very large images
-            shared_mem_size = deviceProp.sharedMemPerBlock;
-        }
-        
-        // Launch CUDA kernel
-        updateGradientKernel<<<grid, block, shared_mem_size>>>(d_gradient, d_luminance, d_seam, width, height);
-        
-        // Check for errors
-        cudaError_t err = cudaGetLastError();
-        if (err != cudaSuccess) {
-            printf("CUDA error in updateGradient kernel: %s\n", cudaGetErrorString(err));
-        }
-        
-        // Wait for kernel to complete
-        cudaDeviceSynchronize();
-    }
-} 
+    // Wait for kernel to complete
+    cudaDeviceSynchronize();
+}
+
+} // namespace seam_carving_cuda
