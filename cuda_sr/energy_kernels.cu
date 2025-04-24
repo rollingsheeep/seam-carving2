@@ -83,7 +83,7 @@ __global__ void forwardEnergyKernel(const float* luminance, float* energy, int w
     }
 }
 
-namespace seam_carving_cuda {
+namespace seam_carving_cuda_kernels {
 
 // Host function to compute Sobel filter (backward energy) using CUDA
 void computeSobelCUDA(const float* lum_data, float* energy_data, int width, int height) {
@@ -123,4 +123,4 @@ void computeForwardEnergyCUDA(const float* lum_data, float* energy_data, int wid
     cudaDeviceSynchronize();
 }
 
-} // namespace seam_carving_cuda 
+} // namespace seam_carving_cuda_kernels

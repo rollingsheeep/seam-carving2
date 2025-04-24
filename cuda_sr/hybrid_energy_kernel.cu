@@ -152,7 +152,7 @@ __global__ void hybridEnergyKernel(const float* luminance, float* hybrid_energy,
     }
 }
 
-namespace seam_carving_cuda {
+namespace seam_carving_cuda_kernels {
 
 // Host function to compute hybrid energy directly on GPU
 void computeHybridEnergyCUDA(const float* d_luminance, float* d_energy, 
@@ -364,4 +364,4 @@ void computeEnergyStatsCUDA(const float* d_backward_energy, const float* d_forwa
     cudaDeviceSynchronize();
 }
 
-} // namespace seam_carving_cuda 
+} // namespace seam_carving_cuda_kernels

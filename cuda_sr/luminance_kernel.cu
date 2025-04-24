@@ -41,7 +41,7 @@ __global__ void rgbToLuminanceKernel(const uint32_t* input, float* output, int w
     }
 }
 
-namespace seam_carving_cuda {
+namespace seam_carving_cuda_kernels {
 
 // Host function to compute luminance using CUDA
 void computeLuminanceCUDA(const uint32_t* image_data, float* lum_data, int width, int height) {

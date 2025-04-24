@@ -5,6 +5,7 @@
 #include <cfloat>
 #include "seam_carving_cuda.cuh"
 
+
 // Custom atomic minimum function for floats (CUDA doesn't have one built-in)
 __device__ void atomicMinFloat(float* addr, float val, int* idx_addr, int idx) {
     float old = *addr;
@@ -57,7 +58,7 @@ __global__ void computeDPRowKernel(const float* energy, float* dp, int width, in
     }
 }
 
-namespace seam_carving_cuda {
+namespace seam_carving_cuda_kernels {
 
 // Host function to compute the full DP matrix using CUDA - safer row-by-row approach
 void computeDynamicProgrammingCUDA(const float* energy_data, float* dp_data, int width, int height) {
@@ -231,4 +232,4 @@ void backtrackSeamCUDA(const float* dp_data, int* seam_data, int width, int heig
     cudaDeviceSynchronize();
 }
 
-} // namespace seam_carving_cuda 
+} // namespace seam_carving_cuda_kernels

@@ -167,7 +167,7 @@ __global__ void updateGradientKernel(float* gradient, const float* luminance,
     }
 }
 
-namespace seam_carving_cuda {
+namespace seam_carving_cuda_kernels {
 
 // Host function to remove seam from image using CUDA
 void cuda_removeSeamKernel(const uint32_t* d_input_image, uint32_t* d_output_image,
@@ -260,4 +260,4 @@ void updateGradientCUDA(float* d_gradient, const float* d_luminance,
     cudaDeviceSynchronize();
 }
 
-} // namespace seam_carving_cuda
+} // namespace seam_carving_cuda_kernels
