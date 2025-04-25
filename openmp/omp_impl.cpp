@@ -197,7 +197,7 @@ void remove_seam(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& 
     std::vector<float> new_lum((img.width - 1) * img.height);
     std::vector<float> new_grad((img.width - 1) * img.height);
     
-    #pragma omp parallel for
+    #pragma omp parallel for schedule(dynamic, 16)
     for (int y = 0; y < img.height; ++y) {
         int x_src = 0;
         int x_dst = 0;
@@ -229,7 +229,7 @@ void remove_seam(Image& img, Matrix& lum, Matrix& grad, const std::vector<int>& 
 // Parallelized gradient update
 void update_gradient(Matrix& grad, const Matrix& lum, const std::vector<int>& seam) {
     // Only update the gradient for pixels adjacent to the removed seam
-    #pragma omp parallel for
+    #pragma omp parallel for schedule(dynamic, 16)
     for (int y = 0; y < grad.height; ++y) {
         int x = seam[y];
         // Update one pixel to the left and right of the seam
@@ -348,7 +348,7 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     float forward_range = max_forward - min_forward + 1e-6f;
     float backward_range = max_backward - min_backward + 1e-6f;
     
-    #pragma omp parallel for collapse(2)
+    #pragma omp parallel for
     for (int y = 0; y < lum.height; ++y) {
         for (int x = 0; x < lum.width; ++x) {
             // Normalize to [0, 1] range
@@ -361,7 +361,6 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     float avg_forward = 0.0f, avg_backward = 0.0f;
     float std_dev_forward = 0.0f, std_dev_backward = 0.0f;
     
-    // Compute averages in parallel with reduction
     #pragma omp parallel
     {
         float local_avg_forward = 0.0f;
@@ -386,7 +385,7 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     avg_forward /= total_pixels;
     avg_backward /= total_pixels;
 
-    // Compute standard deviations in parallel with reduction
+    // Compute standard deviations
     #pragma omp parallel
     {
         float local_std_dev_forward = 0.0f;
@@ -412,7 +411,7 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     std_dev_forward = std::sqrt(std_dev_forward / total_pixels);
     std_dev_backward = std::sqrt(std_dev_backward / total_pixels);
     
-    // Count high energy pixels in normalized space
+    // Count high energy pixels
     int high_energy_forward = 0, high_energy_backward = 0;
     float forward_threshold = avg_forward + std_dev_forward;
     float backward_threshold = avg_backward + std_dev_backward;
@@ -456,7 +455,7 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
              std_dev_backward > std_dev_forward * 0.9f) {
         std::random_device rd;
         std::mt19937 gen(rd());
-        std::uniform_real_distribution<> dis(0.0f, 1.0f);
+        std::uniform_real_distribution<float> dis(0.0f, 1.0f);
         float random_factor = dis(gen);
         if (random_factor < 0.3f) use_backward = true; // 30% chance of using backward
     }
@@ -471,7 +470,7 @@ void compute_hybrid_energy(const Matrix& lum, Matrix& energy) {
     // Use the chosen energy method
     const Matrix& chosen = use_backward ? backward_energy : forward_energy;
     
-    #pragma omp parallel for collapse(2)
+    #pragma omp parallel for
     for (int y = 0; y < lum.height; ++y) {
         for (int x = 0; x < lum.width; ++x) {
             energy.at(y, x) = chosen.at(y, x);

@@ -25,9 +25,16 @@ target_include_directories(seam_carving_openmp PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 # Add optimization flags for release build
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
     if(MSVC)
-        target_compile_options(seam_carving_openmp PRIVATE /O2)
+        # Use LLVM OpenMP for better OpenMP support
+        target_compile_options(seam_carving_openmp PRIVATE /O2 /openmp:llvm)
+        # Add thread affinity for MSVC
+        target_compile_options(seam_carving_openmp PRIVATE /Qopenmp-affinity)
+        # Disable sprintf warning
+        target_compile_definitions(seam_carving_openmp PRIVATE _CRT_SECURE_NO_WARNINGS)
     else()
         target_compile_options(seam_carving_openmp PRIVATE -O3)
+        # Add thread affinity for GCC/Clang
+        target_compile_options(seam_carving_openmp PRIVATE -fopenmp-affinity)
     endif()
 endif()
 

@@ -149,10 +149,10 @@ seam_carving_sequential.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_se
 seam_carving_openmp.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_omp.jpg --energy hybrid --threads 4
 
 # CUDA version
-seam_carving_cuda.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_cuda_1.jpg --energy hybrid
+seam_carving_cuda.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_cuda_sr_new.jpg --energy hybrid
 
 # MPI version with 4 processes
-mpiexec -n 4 seam_carving_mpi.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_mpi.jpg --energy hybrid
+mpiexec -n 4 seam_carving_mpi.exe ..\..\..\images\surfer.jpg ..\..\..\output\surfer_mpi4_new.jpg --energy hybrid
 ```
 
 ## Command Line Arguments
