@@ -240,13 +240,47 @@ void computeHybridEnergyCUDA(Matrix& energy, const Matrix& lum) {
 
 void computeDynamicProgrammingCUDA(Matrix& dp, const Matrix& energy) {
     if (!cuda_initialized) return;
-    
+
     try {
-        // Use the CPU implementation instead of CUDA
-        compute_dynamic_programming(energy, dp);
-    } catch (const std::exception& e) {
-        std::cerr << "Error in computeDynamicProgrammingCUDA: " << e.what() << std::endl;
+        const int width = energy.width;
+        const int height = energy.height;
+
+        // Sanity check
+        if (dp.width != width || dp.height != height) {
+            throw std::runtime_error("DP and energy matrix size mismatch.");
+        }
+
+        const size_t size = width * height * sizeof(float);
+
+        // Allocate device memory
+        float* d_energy = nullptr;
+        float* d_dp = nullptr;
+        CUDA_CHECK(cudaMalloc(&d_energy, size));
+        CUDA_CHECK(cudaMalloc(&d_dp, size));
+
+        // Copy energy matrix from host to device
+        CUDA_CHECK(cudaMemcpy(d_energy, energy.items.data(), size, cudaMemcpyHostToDevice));
+
+        // Run the CUDA kernel wrapper
+        seam_carving_cuda_kernels::computeDynamicProgrammingCUDA(d_energy, d_dp, width, height);
+
+        // Copy DP result from device back to host
+        CUDA_CHECK(cudaMemcpy(dp.items.data(), d_dp, size, cudaMemcpyDeviceToHost));
+
+        // Cleanup
+        CUDA_CHECK(cudaFree(d_energy));
+        CUDA_CHECK(cudaFree(d_dp));
     }
+    catch (const std::exception& e) {
+        std::cerr << "Error in computeDynamicProgrammingCUDA (CUDA): " << e.what() << std::endl;
+    }
+    
+    // try {
+    //     // Use the CPU implementation instead of CUDA
+    //     compute_dynamic_programming(energy, dp);
+    // } catch (const std::exception& e) {
+    //     std::cerr << "Error in computeDynamicProgrammingCUDA: " << e.what() << std::endl;
+    // }
 }
 
 void computeSeamCUDA(std::vector<int>& seam, const Matrix& dp) {

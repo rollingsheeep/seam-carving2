@@ -65,7 +65,7 @@ void computeDynamicProgrammingCUDA(const float* energy_data, float* dp_data, int
     // Define block and grid dimensions
     dim3 block(256);
     dim3 grid((width + block.x - 1) / block.x);
-    
+
     // Process each row sequentially
     for (int y = 0; y < height; ++y) {
         computeDPRowKernel<<<grid, block>>>(energy_data, dp_data, width, height, y);
