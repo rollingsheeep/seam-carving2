@@ -5,7 +5,7 @@
 #include "seam_carving_cuda.cuh"
 
 // Helper device function for atomic min operation on floats (not available natively in CUDA)
-__device__ void atomicMinFloat(float* address, float val) {
+__device__ void (float* address, float val) {
     int* address_as_int = (int*)address;
     int old = *address_as_int;
     int expected;
@@ -15,7 +15,7 @@ __device__ void atomicMinFloat(float* address, float val) {
         old = atomicCAS(address_as_int, expected, new_val);
     } while (expected != old);
 }
-
+atomicMinFloat
 // Helper device function for atomic max operation on floats (not available natively in CUDA)
 __device__ void atomicMaxFloat(float* address, float val) {
     int* address_as_int = (int*)address;

@@ -58,6 +58,31 @@ __global__ void computeDPRowKernel(const float* energy, float* dp, int width, in
     }
 }
 
+// // Kernel for dynamic programming initialization (first row)
+// __global__ void initDynamicProgrammingKernel(float* grad, float* dp, int width) {
+//     int x = blockIdx.x * blockDim.x + threadIdx.x;
+    
+//     if (x < width) {
+//         dp[x] = grad[x];
+//     }
+// }
+
+// // Kernel for dynamic programming (per row)
+// __global__ void computeDynamicProgrammingKernel(float* grad, float* dp, int width, int height, int row) {
+//     int x = blockIdx.x * blockDim.x + threadIdx.x;
+    
+//     if (x < width && row < height) {
+//         float min_prev = dp[(row - 1) * width + x];
+//         if (x > 0) {
+//             min_prev = fminf(min_prev, dp[(row - 1) * width + (x - 1)]);
+//         }
+//         if (x < width - 1) {
+//             min_prev = fminf(min_prev, dp[(row - 1) * width + (x + 1)]);
+//         }
+//         dp[row * width + x] = grad[row * width + x] + min_prev;
+//     }
+// }
+
 namespace seam_carving_cuda_kernels {
 
 // Host function to compute the full DP matrix using CUDA - safer row-by-row approach

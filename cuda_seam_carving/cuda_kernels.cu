@@ -140,9 +140,12 @@ __global__ void computeDynamicProgrammingKernel(float* grad, float* dp, int widt
 __global__ void findMinSeamStartKernel(float* dp, int* seam_start, float* min_energy, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     
-    __shared__ float local_min[BLOCK_SIZE];
-    __shared__ int local_idx[BLOCK_SIZE];
+    // Define shared memory dynamically to ensure adequate size
+    extern __shared__ float s_data[];
+    float* local_min = s_data;
+    int* local_idx = (int*)&local_min[blockDim.x];
     
+    // Initialize shared memory
     local_min[threadIdx.x] = FLT_MAX;
     local_idx[threadIdx.x] = -1;
     
@@ -155,7 +158,7 @@ __global__ void findMinSeamStartKernel(float* dp, int* seam_start, float* min_en
     
     __syncthreads();
     
-    // Reduction to find minimum
+    // Reduction to find minimum using safer approach
     for (unsigned int s = blockDim.x / 2; s > 0; s >>= 1) {
         if (threadIdx.x < s) {
             if (local_min[threadIdx.x] > local_min[threadIdx.x + s]) {
@@ -166,23 +169,27 @@ __global__ void findMinSeamStartKernel(float* dp, int* seam_start, float* min_en
         __syncthreads();
     }
     
-    // Write result for this block to global memory
+    // Only thread 0 updates global memory
     if (threadIdx.x == 0) {
-        atomicMinFloat(min_energy, local_min[0]);
-        if (local_min[0] == *min_energy) {
-            *seam_start = local_idx[0];
+        // Safer atomic update
+        float old_min = *min_energy;
+        if (local_min[0] < old_min) {
+            atomicMinFloat(min_energy, local_min[0]);
+            if (local_min[0] == *min_energy) {
+                *seam_start = local_idx[0];
+            }
         }
     }
 }
 
 // Custom implementation of atomicMin for float
 __device__ void atomicMinFloat(float* addr, float val) {
-    int* addr_as_int = reinterpret_cast<int*>(addr);
+    int* addr_as_int = (int*)addr;
     int old = *addr_as_int;
     int expected;
     do {
         expected = old;
-        int new_val = __float_as_int(fminf(__int_as_float(expected), val));
+        int new_val = __float_as_int(min(__int_as_float(expected), val));
         old = atomicCAS(addr_as_int, expected, new_val);
     } while (expected != old);
 }
@@ -382,7 +389,8 @@ void computeSeamCuda(DeviceMatrix d_dp, int* d_seam, int* h_seam) {
     // Find the starting point of the minimum energy seam
     dim3 blockSize(BLOCK_SIZE, 1);
     dim3 gridSize((width + blockSize.x - 1) / blockSize.x, 1);
-    findMinSeamStartKernel<<<gridSize, blockSize>>>(d_dp.items, d_seam_start, d_min_energy, width, height);
+    int shared_mem_size = BLOCK_SIZE * sizeof(float) + BLOCK_SIZE * sizeof(int);
+    findMinSeamStartKernel<<<gridSize, blockSize, shared_mem_size>>>(d_dp.items, d_seam_start, d_min_energy, width, height);
     CUDA_CHECK(cudaGetLastError());
     CUDA_CHECK(cudaDeviceSynchronize());
     
