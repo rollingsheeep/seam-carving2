@@ -21,9 +21,6 @@ extern "C" {
     int findMinIndexLastRowCUDA(const float* dp_data, int width, int height);
     void backtrackSeamCUDA(const float* dp_data, int* seam_data, int width, int height, int min_idx);
     
-    // From visualization_kernel.cu
-    void visualizeSeamCUDA(const uint32_t* image_data, uint32_t* output_data, const int* seam_data, int width, int height);
-    
     // From seam_kernel.cu
     void cuda_removeSeamKernel(const uint32_t* d_input_image, uint32_t* d_output_image, 
                       const int* d_seam, int width, int height);

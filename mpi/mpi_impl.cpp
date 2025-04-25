@@ -315,6 +315,31 @@ void print_usage(const char* program) {
 int hybrid_forward_count = 0;
 int hybrid_backward_count = 0;
 
+// Function to calculate row ranges and displacements for MPI_Scatterv
+void calculate_row_ranges(int height, int width, int num_procs, int rank,
+                         int& start_row, int& end_row,
+                         std::vector<int>& recvcounts, std::vector<int>& displs) {
+    int rows_per_proc = height / num_procs;
+    int remainder = height % num_procs;
+    
+    start_row = rank * rows_per_proc + std::min(rank, remainder);
+    end_row = start_row + rows_per_proc + (rank < remainder ? 1 : 0);
+    
+    // Ensure valid row ranges
+    start_row = std::min(start_row, height);
+    end_row = std::min(end_row, height);
+    
+    // Calculate receive counts and displacements for all processes
+    for (int i = 0; i < num_procs; i++) {
+        int proc_start = i * rows_per_proc + std::min(i, remainder);
+        int proc_end = proc_start + rows_per_proc + (i < remainder ? 1 : 0);
+        proc_start = std::min(proc_start, height);
+        proc_end = std::min(proc_end, height);
+        recvcounts[i] = width * (proc_end - proc_start);
+        displs[i] = width * proc_start;
+    }
+}
+
 int main(int argc, char** argv) {
     // Initialize MPI
     MPI_Init(&argc, &argv);
@@ -407,36 +432,59 @@ int main(int argc, char** argv) {
     MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
     
-    // All processes except root need to create their image and matrix objects
+    // Initialize matrices on all processes with the correct dimensions
     if (rank != 0) {
         img = Image(width, height);
-        
-        // Note: non-root processes don't actually need the full image pixels,
-        // they only need the luminance and energy matrices which will be 
-        // calculated in parallel and shared
     }
-    
-    // Create matrices for processing for all processes
     lum = Matrix(width, height);
     grad = Matrix(width, height);
-    Matrix dp(width, height);
     
-    // Broadcast the image pixels from root to all processes
-    MPI_Bcast(img.pixels.data(), width * height, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+    // Calculate row ranges and displacements
+    int start_row, end_row;
+    std::vector<int> recvcounts(num_procs);
+    std::vector<int> displs(num_procs);
+    calculate_row_ranges(height, width, num_procs, rank, start_row, end_row, recvcounts, displs);
     
-    // Calculate work division for parallel processing
-    int rows_per_proc = height / num_procs;
-    int start_row = rank * rows_per_proc;
-    int end_row = (rank == num_procs - 1) ? height : start_row + rows_per_proc;
+    // Create local image and matrix objects with only necessary rows
+    int local_height = end_row - start_row;
+    Image local_img(width, local_height);
+    Matrix local_lum(width, local_height);
+    Matrix local_grad(width, local_height);
+    
+    // Scatter image data using MPI_Scatterv
+    if (rank == 0) {
+        // Root process sends data to all processes
+        for (int i = 1; i < num_procs; i++) {
+            int proc_start = displs[i] / width;
+            int proc_end = proc_start + recvcounts[i] / width;
+            MPI_Send(&img.pixels[displs[i]], recvcounts[i], MPI_UINT32_T, i, 0, MPI_COMM_WORLD);
+        }
+        // Root process copies its own portion
+        std::copy(img.pixels.begin(), img.pixels.begin() + recvcounts[0], local_img.pixels.begin());
+    } else {
+        // Other processes receive their portion
+        MPI_Recv(local_img.pixels.data(), recvcounts[rank], MPI_UINT32_T, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
     
     // Compute initial luminance in parallel
     auto luminance_start = std::chrono::high_resolution_clock::now();
-    compute_luminance(img, lum, start_row, end_row);
+    compute_luminance(local_img, local_lum, 0, local_height);
     
-    // Gather all luminance results to the root process and broadcast back to ensure all processes have complete data
-    MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                  lum.items.data(), width * height, MPI_FLOAT, 
-                  MPI_COMM_WORLD);
+    // Gather luminance results using MPI_Gatherv
+    std::vector<float> recv_lum(width * height);
+    MPI_Gatherv(local_lum.items.data(), width * local_height, MPI_FLOAT,
+                recv_lum.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                0, MPI_COMM_WORLD);
+    
+    // Copy received data back to lum matrix on root process
+    if (rank == 0) {
+        std::copy(recv_lum.begin(), recv_lum.end(), lum.items.begin());
+    }
+    
+    // Scatter luminance data instead of broadcasting
+    MPI_Scatterv(recv_lum.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                 lum.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                 0, MPI_COMM_WORLD);
     
     auto luminance_end = std::chrono::high_resolution_clock::now();
     auto luminance_duration = std::chrono::duration_cast<std::chrono::milliseconds>(luminance_end - luminance_start);
@@ -452,29 +500,75 @@ int main(int argc, char** argv) {
     Matrix backward_energy(width, height);
     
     switch (energy_type) {
-        case FORWARD:
+        case FORWARD: {
             if (rank == 0) std::cout << "Using forward energy calculation\n";
-            compute_forward_energy_partial(lum, grad, start_row, end_row);
-            break;
+            if (end_row > start_row) {
+                compute_forward_energy_partial(lum, grad, start_row, end_row);
+            }
             
-        case BACKWARD:
+            // Gather gradient results using MPI_Gatherv
+            std::vector<float> recv_grad(width * height);
+            MPI_Gatherv(grad.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                       recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                       0, MPI_COMM_WORLD);
+            
+            // Copy received data back to grad matrix on root process
+            if (rank == 0) {
+                std::copy(recv_grad.begin(), recv_grad.end(), grad.items.begin());
+            }
+            
+            // Scatter gradient data instead of broadcasting
+            MPI_Scatterv(recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                         grad.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                         0, MPI_COMM_WORLD);
+            break;
+        }
+            
+        case BACKWARD: {
             if (rank == 0) std::cout << "Using backward energy calculation (Sobel filter)\n";
-            compute_sobel_filter(lum, grad, start_row, end_row);
-            break;
+            if (end_row > start_row) {
+                compute_sobel_filter(lum, grad, start_row, end_row);
+            }
             
-        case HYBRID:
+            // Gather gradient results using MPI_Gatherv
+            std::vector<float> recv_grad(width * height);
+            MPI_Gatherv(grad.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                       recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                       0, MPI_COMM_WORLD);
+            
+            // Copy received data back to grad matrix on root process
+            if (rank == 0) {
+                std::copy(recv_grad.begin(), recv_grad.end(), grad.items.begin());
+            }
+            
+            // Scatter gradient data instead of broadcasting
+            MPI_Scatterv(recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                         grad.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                         0, MPI_COMM_WORLD);
+            break;
+        }
+            
+        case HYBRID: {
             if (rank == 0) std::cout << "Using hybrid energy calculation\n";
             
-            // Each process computes local min/max for its portion
+            // Each process computes local statistics first
             float local_min_forward = FLT_MAX, local_max_forward = -FLT_MAX;
             float local_min_backward = FLT_MAX, local_max_backward = -FLT_MAX;
             
-            compute_hybrid_energy_partial(lum, grad, start_row, end_row, 
-                                         &local_min_forward, &local_max_forward,
-                                         &local_min_backward, &local_max_backward,
-                                         forward_energy, backward_energy);
+            // Compute local min/max values
+            for (int y = start_row; y < end_row; ++y) {
+                for (int x = 0; x < width; ++x) {
+                    float f_val = forward_energy.at(y, x);
+                    float b_val = backward_energy.at(y, x);
+                    
+                    local_min_forward = std::min(local_min_forward, f_val);
+                    local_max_forward = std::max(local_max_forward, f_val);
+                    local_min_backward = std::min(local_min_backward, b_val);
+                    local_max_backward = std::max(local_max_backward, b_val);
+                }
+            }
             
-            // Reduce to find global min/max values
+            // Use MPI_Allreduce only once for min/max values
             float global_min_forward, global_max_forward;
             float global_min_backward, global_max_backward;
             
@@ -483,19 +577,7 @@ int main(int argc, char** argv) {
             MPI_Allreduce(&local_min_backward, &global_min_backward, 1, MPI_FLOAT, MPI_MIN, MPI_COMM_WORLD);
             MPI_Allreduce(&local_max_backward, &global_max_backward, 1, MPI_FLOAT, MPI_MAX, MPI_COMM_WORLD);
             
-            // Gather forward and backward energies to all processes
-            MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                         forward_energy.items.data(), width * height, MPI_FLOAT, 
-                         MPI_COMM_WORLD);
-            
-            MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                         backward_energy.items.data(), width * height, MPI_FLOAT, 
-                         MPI_COMM_WORLD);
-            
-            // Create normalized versions of both energy types
-            Matrix norm_forward_energy(width, height);
-            Matrix norm_backward_energy(width, height);
-            
+            // Normalize using global min/max values
             float forward_range = global_max_forward - global_min_forward + 1e-6f;
             float backward_range = global_max_backward - global_min_backward + 1e-6f;
             
@@ -503,28 +585,19 @@ int main(int argc, char** argv) {
             for (int y = start_row; y < end_row; ++y) {
                 for (int x = 0; x < width; ++x) {
                     // Normalize to [0, 1] range
-                    norm_forward_energy.at(y, x) = (forward_energy.at(y, x) - global_min_forward) / forward_range;
-                    norm_backward_energy.at(y, x) = (backward_energy.at(y, x) - global_min_backward) / backward_range;
+                    forward_energy.at(y, x) = (forward_energy.at(y, x) - global_min_forward) / forward_range;
+                    backward_energy.at(y, x) = (backward_energy.at(y, x) - global_min_backward) / backward_range;
                 }
             }
             
-            // Gather normalized energies to all processes
-            MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                         norm_forward_energy.items.data(), width * height, MPI_FLOAT, 
-                         MPI_COMM_WORLD);
-            
-            MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                         norm_backward_energy.items.data(), width * height, MPI_FLOAT, 
-                         MPI_COMM_WORLD);
-            
-            // Calculate statistics on normalized energies
+            // Calculate local statistics for energy selection
             float local_sum_forward = 0.0f, local_sum_backward = 0.0f;
             int local_high_energy_forward = 0, local_high_energy_backward = 0;
             
             for (int y = start_row; y < end_row; ++y) {
                 for (int x = 0; x < width; ++x) {
-                    local_sum_forward += norm_forward_energy.at(y, x);
-                    local_sum_backward += norm_backward_energy.at(y, x);
+                    local_sum_forward += forward_energy.at(y, x);
+                    local_sum_backward += backward_energy.at(y, x);
                 }
             }
             
@@ -537,13 +610,13 @@ int main(int argc, char** argv) {
             float avg_forward = global_sum_forward / total_pixels;
             float avg_backward = global_sum_backward / total_pixels;
             
-            // Calculate standard deviations
+            // Calculate local standard deviations
             float local_sum_sqr_diff_forward = 0.0f, local_sum_sqr_diff_backward = 0.0f;
             
             for (int y = start_row; y < end_row; ++y) {
                 for (int x = 0; x < width; ++x) {
-                    float diff_forward = norm_forward_energy.at(y, x) - avg_forward;
-                    float diff_backward = norm_backward_energy.at(y, x) - avg_backward;
+                    float diff_forward = forward_energy.at(y, x) - avg_forward;
+                    float diff_backward = backward_energy.at(y, x) - avg_backward;
                     local_sum_sqr_diff_forward += diff_forward * diff_forward;
                     local_sum_sqr_diff_backward += diff_backward * diff_backward;
                 }
@@ -563,8 +636,8 @@ int main(int argc, char** argv) {
             
             for (int y = start_row; y < end_row; ++y) {
                 for (int x = 0; x < width; ++x) {
-                    if (norm_forward_energy.at(y, x) > forward_threshold) local_high_energy_forward++;
-                    if (norm_backward_energy.at(y, x) > backward_threshold) local_high_energy_backward++;
+                    if (forward_energy.at(y, x) > forward_threshold) local_high_energy_forward++;
+                    if (backward_energy.at(y, x) > backward_threshold) local_high_energy_backward++;
                 }
             }
             
@@ -617,19 +690,25 @@ int main(int argc, char** argv) {
                 }
             }
             
-            // Gather the final gradient values
-            MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                         grad.items.data(), width * height, MPI_FLOAT, 
-                         MPI_COMM_WORLD);
+            // Gather gradient results using MPI_Gatherv
+            std::vector<float> recv_grad(width * height);
+            MPI_Gatherv(grad.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                       recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                       0, MPI_COMM_WORLD);
+            
+            // Copy received data back to grad matrix on root process
+            if (rank == 0) {
+                std::copy(recv_grad.begin(), recv_grad.end(), grad.items.begin());
+            }
+            
+            // Scatter gradient data instead of broadcasting
+            MPI_Scatterv(recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                         grad.items.data() + width * start_row, width * local_height, MPI_FLOAT,
+                         0, MPI_COMM_WORLD);
             break;
+        }
     }
     
-    // Gather all gradient results if not hybrid (hybrid already gathered)
-    if (energy_type != HYBRID) {
-        MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                     grad.items.data(), width * height, MPI_FLOAT, 
-                     MPI_COMM_WORLD);
-    }
     
     auto energy_end = std::chrono::high_resolution_clock::now();
     auto energy_duration = std::chrono::duration_cast<std::chrono::milliseconds>(energy_end - energy_start);
@@ -649,9 +728,9 @@ int main(int argc, char** argv) {
     long long total_remove_time = 0;
     long long total_update_time = 0;
     
-    for (int i = 0; i < seams_to_remove; ++i) {
+    for (int seam_idx = 0; seam_idx < seams_to_remove; ++seam_idx) {
         // Create a new dp matrix with the current dimensions
-        dp = Matrix(img.width, img.height);
+        Matrix dp(img.width, img.height);
         
         // Time dynamic programming
         auto dp_start = std::chrono::high_resolution_clock::now();
@@ -666,13 +745,51 @@ int main(int argc, char** argv) {
         // Broadcast the first row to all processes
         MPI_Bcast(dp.items.data(), img.width, MPI_FLOAT, 0, MPI_COMM_WORLD);
         
-        // Each process computes its portion of the dp matrix
-        compute_dynamic_programming_partial(grad, dp, start_row, end_row);
+        // Calculate row ranges for each process
+        std::vector<int> proc_start_rows(num_procs);
+        std::vector<int> proc_end_rows(num_procs);
         
-        // Gather all dp results to all processes
-        MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                     dp.items.data(), dp.width * dp.height, MPI_FLOAT, 
-                     MPI_COMM_WORLD);
+        // Calculate row ranges for all processes
+        int rows_per_process = img.height / num_procs;
+        int remainder_rows = img.height % num_procs;
+        
+        for (int p = 0; p < num_procs; p++) {
+            int proc_start = p * rows_per_process + (p < remainder_rows ? p : remainder_rows);
+            int proc_end = proc_start + rows_per_process + (p < remainder_rows ? 1 : 0);
+            proc_start = std::min(proc_start, img.height);
+            proc_end = std::min(proc_end, img.height);
+            proc_start_rows[p] = proc_start;
+            proc_end_rows[p] = proc_end;
+        }
+        
+        // Each process computes its portion of the dp matrix
+        for (int y = 1; y < img.height; ++y) {
+            // Determine which process owns this row
+            int owner_proc = -1;
+            for (int p = 0; p < num_procs; p++) {
+                if (y >= proc_start_rows[p] && y < proc_end_rows[p]) {
+                    owner_proc = p;
+                    break;
+                }
+            }
+            
+            // Only the process that owns this row computes it
+            if (rank == owner_proc) {
+                for (int x = 0; x < img.width; ++x) {
+                    float min_prev = dp.at(y - 1, x);
+                    if (x > 0) {
+                        min_prev = std::min(min_prev, dp.at(y - 1, x - 1));
+                    }
+                    if (x < img.width - 1) {
+                        min_prev = std::min(min_prev, dp.at(y - 1, x + 1));
+                    }
+                    dp.at(y, x) = grad.at(y, x) + min_prev;
+                }
+            }
+            
+            // Broadcast the computed row to all processes
+            MPI_Bcast(&dp.items[y * dp.stride], img.width, MPI_FLOAT, owner_proc, MPI_COMM_WORLD);
+        }
         
         auto dp_end = std::chrono::high_resolution_clock::now();
         if (rank == 0) {
@@ -689,10 +806,10 @@ int main(int argc, char** argv) {
             total_seam_time += std::chrono::duration_cast<std::chrono::microseconds>(seam_end - seam_start).count();
         }
         
+        // Ensure all processes have the seam vector properly sized
+        seam.resize(img.height);
+        
         // Broadcast seam to all processes
-        if (seam.size() != (size_t)img.height) {
-            seam.resize(img.height);
-        }
         MPI_Bcast(seam.data(), img.height, MPI_INT, 0, MPI_COMM_WORLD);
         
         // Time seam removal (root process only)
@@ -705,48 +822,125 @@ int main(int argc, char** argv) {
             total_remove_time += std::chrono::duration_cast<std::chrono::microseconds>(remove_end - remove_start).count();
         }
         
-        // Broadcast updated dimensions and matrices to all processes
-        MPI_Bcast(&img.width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&img.stride, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&lum.width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&lum.stride, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&grad.width, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(&grad.stride, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        // First broadcast the new dimensions
+        int new_width;
+        if (rank == 0) {
+            new_width = img.width;
+        }
+        MPI_Bcast(&new_width, 1, MPI_INT, 0, MPI_COMM_WORLD);
         
-        // Update the matrix sizes for non-root processes
+        // Update width variable for all processes
+        width = new_width;
+        
+        // All processes resize their containers
         if (rank != 0) {
-            img.pixels.resize(img.width * img.height);
-            lum.items.resize(lum.width * lum.height);
-            grad.items.resize(grad.width * grad.height);
+            img.width = new_width;
+            img.stride = new_width;
+            lum.width = new_width;
+            lum.stride = new_width;
+            grad.width = new_width;
+            grad.stride = new_width;
+            
+            img.pixels.resize(new_width * img.height);
+            lum.items.resize(new_width * lum.height);
+            grad.items.resize(new_width * grad.height);
         }
         
-        // Broadcast the updated matrices
-        MPI_Bcast(img.pixels.data(), img.width * img.height, MPI_UINT32_T, 0, MPI_COMM_WORLD);
-        MPI_Bcast(lum.items.data(), lum.width * lum.height, MPI_FLOAT, 0, MPI_COMM_WORLD);
-        MPI_Bcast(grad.items.data(), grad.width * grad.height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        // Synchronize all processes after resizing
+        MPI_Barrier(MPI_COMM_WORLD);
+        
+        // Now broadcast the actual data
+        MPI_Bcast(img.pixels.data(), new_width * img.height, MPI_UINT32_T, 0, MPI_COMM_WORLD);
+        MPI_Bcast(lum.items.data(), new_width * lum.height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        MPI_Bcast(grad.items.data(), new_width * grad.height, MPI_FLOAT, 0, MPI_COMM_WORLD);
         
         // Recalculate row assignments as the matrix size changed
-        rows_per_proc = img.height / num_procs;
-        start_row = rank * rows_per_proc;
-        end_row = (rank == num_procs - 1) ? img.height : start_row + rows_per_proc;
+        rows_per_process = img.height / num_procs;
+        remainder_rows = img.height % num_procs;
+        start_row = rank * rows_per_process + (rank < remainder_rows ? rank : remainder_rows);
+        end_row = start_row + rows_per_process + (rank < remainder_rows ? 1 : 0);
+        
+        // Ensure row bounds are valid
+        start_row = std::min(start_row, img.height);
+        end_row = std::min(end_row, img.height);
+        
+        // Update receive counts and displacements for new dimensions
+        for (int proc = 0; proc < num_procs; proc++) {
+            int proc_start = proc * rows_per_process + (proc < remainder_rows ? proc : remainder_rows);
+            int proc_end = proc_start + rows_per_process + (proc < remainder_rows ? 1 : 0);
+            proc_start = std::min(proc_start, img.height);
+            proc_end = std::min(proc_end, img.height);
+            recvcounts[proc] = width * (proc_end - proc_start);
+            displs[proc] = width * proc_start;
+        }
         
         // Time energy update
         auto update_start = std::chrono::high_resolution_clock::now();
         
+        // Synchronize before energy update
+        MPI_Barrier(MPI_COMM_WORLD);
+        
         switch (energy_type) {
-            case FORWARD:
+            case FORWARD: {
                 compute_forward_energy_partial(lum, grad, start_row, end_row);
-                break;
+                // Create temporary buffer for gradient
+                std::vector<float> temp_grad(width * (end_row - start_row));
+                std::vector<float> recv_grad(width * height);
                 
-            case BACKWARD:
-                update_gradient_partial(grad, lum, seam, start_row, end_row);
+                // Copy local portion to temporary buffer
+                std::copy(grad.items.data() + start_row * width,
+                         grad.items.data() + end_row * width,
+                         temp_grad.begin());
+                
+                // Gather gradient values to root process
+                MPI_Gatherv(temp_grad.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                // Copy received data back to grad matrix on root process
+                if (rank == 0) {
+                    std::copy(recv_grad.begin(), recv_grad.end(), grad.items.begin());
+                }
+                
+                // Broadcast complete gradient matrix to all processes
+                MPI_Bcast(grad.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
                 break;
+            }
+                
+            case BACKWARD: {
+                update_gradient_partial(grad, lum, seam, start_row, end_row);
+                // Create temporary buffer for gradient
+                std::vector<float> temp_grad(width * (end_row - start_row));
+                std::vector<float> recv_grad(width * height);
+                
+                // Copy local portion to temporary buffer
+                std::copy(grad.items.data() + start_row * width,
+                         grad.items.data() + end_row * width,
+                         temp_grad.begin());
+                
+                // Gather gradient values to root process
+                MPI_Gatherv(temp_grad.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                // Copy received data back to grad matrix on root process
+                if (rank == 0) {
+                    std::copy(recv_grad.begin(), recv_grad.end(), grad.items.begin());
+                }
+                
+                // Broadcast complete gradient matrix to all processes
+                MPI_Bcast(grad.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+                break;
+            }
                 
             case HYBRID: {
                 // For hybrid mode, we need to decide which method to use for each iteration
                 // Reuse the matrices created earlier
                 forward_energy = Matrix(img.width, img.height);
                 backward_energy = Matrix(img.width, img.height);
+                
+                // Synchronize before computing energies
+                MPI_Barrier(MPI_COMM_WORLD);
                 
                 // Each process computes local min/max for its portion
                 float local_min_forward = FLT_MAX, local_max_forward = -FLT_MAX;
@@ -757,33 +951,180 @@ int main(int argc, char** argv) {
                                             &local_min_backward, &local_max_backward,
                                             forward_energy, backward_energy);
                 
-                // Reduce to find global min/max values
+                // Create temporary buffers for gathering
+                std::vector<float> temp_forward(width * (end_row - start_row));
+                std::vector<float> temp_backward(width * (end_row - start_row));
+                std::vector<float> recv_forward(width * height);
+                std::vector<float> recv_backward(width * height);
+                
+                // Copy local portions to temporary buffers
+                std::copy(forward_energy.items.data() + start_row * width,
+                         forward_energy.items.data() + end_row * width,
+                         temp_forward.begin());
+                std::copy(backward_energy.items.data() + start_row * width,
+                         backward_energy.items.data() + end_row * width,
+                         temp_backward.begin());
+                
+                // Gather forward and backward energies to root process
+                MPI_Gatherv(temp_forward.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_forward.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                MPI_Gatherv(temp_backward.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_backward.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                // Copy received data back to matrices on root process
+                if (rank == 0) {
+                    std::copy(recv_forward.begin(), recv_forward.end(), forward_energy.items.begin());
+                    std::copy(recv_backward.begin(), recv_backward.end(), backward_energy.items.begin());
+                }
+                
+                // Broadcast complete matrices to all processes
+                MPI_Bcast(forward_energy.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+                MPI_Bcast(backward_energy.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+                
+                // Declare global min/max variables
                 float global_min_forward, global_max_forward;
                 float global_min_backward, global_max_backward;
                 
+                // Reduce to find global min/max values
                 MPI_Allreduce(&local_min_forward, &global_min_forward, 1, MPI_FLOAT, MPI_MIN, MPI_COMM_WORLD);
                 MPI_Allreduce(&local_max_forward, &global_max_forward, 1, MPI_FLOAT, MPI_MAX, MPI_COMM_WORLD);
                 MPI_Allreduce(&local_min_backward, &global_min_backward, 1, MPI_FLOAT, MPI_MIN, MPI_COMM_WORLD);
                 MPI_Allreduce(&local_max_backward, &global_max_backward, 1, MPI_FLOAT, MPI_MAX, MPI_COMM_WORLD);
                 
-                // Similar logic as in the initial hybrid energy calculation
-                // Gather, normalize, compute statistics, etc.
-                // Shortened for brevity but following the same pattern as before
+                // Create normalized versions of both energy types
+                Matrix norm_forward_energy(width, height);
+                Matrix norm_backward_energy(width, height);
                 
-                // Choose whether to use forward or backward energy
-                bool use_backward = false;
+                float forward_range = global_max_forward - global_min_forward + 1e-6f;
+                float backward_range = global_max_backward - global_min_backward + 1e-6f;
                 
-                // Use a simpler decision process for subsequent iterations
-                if (rank == 0) {
-                    if (hybrid_backward_count > hybrid_forward_count) {
-                        use_backward = false;  // Balance usage
-                    } else {
-                        use_backward = true;
+                // Each process normalizes its portion of the data
+                for (int y = start_row; y < end_row; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        // Normalize to [0, 1] range
+                        norm_forward_energy.at(y, x) = (forward_energy.at(y, x) - global_min_forward) / forward_range;
+                        norm_backward_energy.at(y, x) = (backward_energy.at(y, x) - global_min_backward) / backward_range;
                     }
                 }
                 
-                // Broadcast the decision to all processes
-                MPI_Bcast(&use_backward, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+                // Create temporary buffers for normalized energies
+                std::vector<float> temp_norm_forward(width * (end_row - start_row));
+                std::vector<float> temp_norm_backward(width * (end_row - start_row));
+                std::vector<float> recv_norm_forward(width * height);
+                std::vector<float> recv_norm_backward(width * height);
+                
+                // Copy local portions to temporary buffers
+                std::copy(norm_forward_energy.items.data() + start_row * width,
+                         norm_forward_energy.items.data() + end_row * width,
+                         temp_norm_forward.begin());
+                std::copy(norm_backward_energy.items.data() + start_row * width,
+                         norm_backward_energy.items.data() + end_row * width,
+                         temp_norm_backward.begin());
+                
+                // Gather normalized energies to root process
+                MPI_Gatherv(temp_norm_forward.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_norm_forward.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                MPI_Gatherv(temp_norm_backward.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_norm_backward.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                // Copy received data back to matrices on root process
+                if (rank == 0) {
+                    std::copy(recv_norm_forward.begin(), recv_norm_forward.end(), norm_forward_energy.items.begin());
+                    std::copy(recv_norm_backward.begin(), recv_norm_backward.end(), norm_backward_energy.items.begin());
+                }
+                
+                // Broadcast complete normalized matrices to all processes
+                MPI_Bcast(norm_forward_energy.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+                MPI_Bcast(norm_backward_energy.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
+                
+                // Calculate statistics on normalized energies
+                float local_sum_forward = 0.0f, local_sum_backward = 0.0f;
+                int local_high_energy_forward = 0, local_high_energy_backward = 0;
+                
+                for (int y = start_row; y < end_row; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        local_sum_forward += norm_forward_energy.at(y, x);
+                        local_sum_backward += norm_backward_energy.at(y, x);
+                    }
+                }
+                
+                // Reduce to find global sums
+                float global_sum_forward, global_sum_backward;
+                MPI_Allreduce(&local_sum_forward, &global_sum_forward, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+                MPI_Allreduce(&local_sum_backward, &global_sum_backward, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+                
+                int total_pixels = width * height;
+                float avg_forward = global_sum_forward / total_pixels;
+                float avg_backward = global_sum_backward / total_pixels;
+                
+                // Calculate standard deviations
+                float local_sum_sqr_diff_forward = 0.0f, local_sum_sqr_diff_backward = 0.0f;
+                
+                for (int y = start_row; y < end_row; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        float diff_forward = norm_forward_energy.at(y, x) - avg_forward;
+                        float diff_backward = norm_backward_energy.at(y, x) - avg_backward;
+                        local_sum_sqr_diff_forward += diff_forward * diff_forward;
+                        local_sum_sqr_diff_backward += diff_backward * diff_backward;
+                    }
+                }
+                
+                // Reduce to find global sum of squared differences
+                float global_sum_sqr_diff_forward, global_sum_sqr_diff_backward;
+                MPI_Allreduce(&local_sum_sqr_diff_forward, &global_sum_sqr_diff_forward, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+                MPI_Allreduce(&local_sum_sqr_diff_backward, &global_sum_sqr_diff_backward, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+                
+                float std_dev_forward = std::sqrt(global_sum_sqr_diff_forward / total_pixels);
+                float std_dev_backward = std::sqrt(global_sum_sqr_diff_backward / total_pixels);
+                
+                // Count high energy pixels in normalized space
+                float forward_threshold = avg_forward + std_dev_forward;
+                float backward_threshold = avg_backward + std_dev_backward;
+                
+                for (int y = start_row; y < end_row; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        if (norm_forward_energy.at(y, x) > forward_threshold) local_high_energy_forward++;
+                        if (norm_backward_energy.at(y, x) > backward_threshold) local_high_energy_backward++;
+                    }
+                }
+                
+                // Reduce to find global high energy pixel counts
+                int global_high_energy_forward, global_high_energy_backward;
+                MPI_Allreduce(&local_high_energy_forward, &global_high_energy_forward, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+                MPI_Allreduce(&local_high_energy_backward, &global_high_energy_backward, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+                
+                float edge_density_forward = static_cast<float>(global_high_energy_forward) / total_pixels;
+                float edge_density_backward = static_cast<float>(global_high_energy_backward) / total_pixels;
+                
+                // Compare normalized energies to decide which to use
+                bool use_backward = false;
+                
+                // Factor 1: Edge density comparison (which method detects more edges)
+                if (edge_density_backward > edge_density_forward * 1.1f) {
+                    use_backward = true;
+                } 
+                // Factor 2: Standard deviation comparison (which method has more variation)
+                else if (std_dev_backward > std_dev_forward * 1.1f) {
+                    use_backward = true;
+                }
+                // Factor 3: Add randomness to break ties and ensure some backward energy usage
+                else if (edge_density_backward > edge_density_forward * 0.9f && 
+                        std_dev_backward > std_dev_forward * 0.9f) {
+                    // Root process makes the random decision to ensure consistency
+                    if (rank == 0) {
+                        float random_factor = static_cast<float>(rand()) / RAND_MAX;
+                        if (random_factor < 0.3f) use_backward = true; // 30% chance of using backward
+                    }
+                    
+                    // Broadcast the decision to all processes
+                    MPI_Bcast(&use_backward, 1, MPI_C_BOOL, 0, MPI_COMM_WORLD);
+                }
                 
                 // Update counters on root process
                 if (rank == 0) {
@@ -795,27 +1136,37 @@ int main(int argc, char** argv) {
                 }
                 
                 // Use the chosen energy method
-                if (use_backward) {
-                    for (int y = start_row; y < end_row; ++y) {
-                        for (int x = 0; x < img.width; ++x) {
-                            grad.at(y, x) = backward_energy.at(y, x);
-                        }
-                    }
-                } else {
-                    for (int y = start_row; y < end_row; ++y) {
-                        for (int x = 0; x < img.width; ++x) {
-                            grad.at(y, x) = forward_energy.at(y, x);
-                        }
+                const Matrix& chosen = use_backward ? backward_energy : forward_energy;
+                for (int y = start_row; y < end_row; ++y) {
+                    for (int x = 0; x < width; ++x) {
+                        grad.at(y, x) = chosen.at(y, x);
                     }
                 }
+                
+                // Create temporary buffer for gradient
+                std::vector<float> temp_grad(width * (end_row - start_row));
+                std::vector<float> recv_grad(width * height);
+                
+                // Copy local portion to temporary buffer
+                std::copy(grad.items.data() + start_row * width,
+                         grad.items.data() + end_row * width,
+                         temp_grad.begin());
+                
+                // Gather gradient values to root process
+                MPI_Gatherv(temp_grad.data(), width * (end_row - start_row), MPI_FLOAT,
+                           recv_grad.data(), recvcounts.data(), displs.data(), MPI_FLOAT,
+                           0, MPI_COMM_WORLD);
+                
+                // Copy received data back to grad matrix on root process
+                if (rank == 0) {
+                    std::copy(recv_grad.begin(), recv_grad.end(), grad.items.begin());
+                }
+                
+                // Broadcast complete gradient matrix to all processes
+                MPI_Bcast(grad.items.data(), width * height, MPI_FLOAT, 0, MPI_COMM_WORLD);
                 break;
             }
         }
-        
-        // Gather updated gradient
-        MPI_Allgather(MPI_IN_PLACE, 0, MPI_DATATYPE_NULL, 
-                     grad.items.data(), grad.width * grad.height, MPI_FLOAT, 
-                     MPI_COMM_WORLD);
         
         auto update_end = std::chrono::high_resolution_clock::now();
         if (rank == 0) {
@@ -823,8 +1174,8 @@ int main(int argc, char** argv) {
         }
         
         // Print progress every 10% of seams (root process only)
-        if (rank == 0 && ((i + 1) % (seams_to_remove / 10) == 0 || i == seams_to_remove - 1)) {
-            int progress = ((i + 1) * 100) / seams_to_remove;
+        if (rank == 0 && ((seam_idx + 1) % (seams_to_remove / 10) == 0 || seam_idx == seams_to_remove - 1)) {
+            int progress = ((seam_idx + 1) * 100) / seams_to_remove;
             std::cout << "Progress: " << progress << "% complete\n";
         }
     }
@@ -853,6 +1204,14 @@ int main(int argc, char** argv) {
 
         // Save the result
         auto save_start = std::chrono::high_resolution_clock::now();
+        
+        // Sanity check before saving
+        if (img.width == 0 || img.height == 0 || img.pixels.empty()) {
+            std::cerr << "ERROR: Invalid image state before saving. Possibly due to earlier seam removal or loading failure.\n";
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            return 1;
+        }
+        
         if (!stbi_write_png(output_path, img.width, img.height, 4, img.pixels.data(), img.stride * sizeof(uint32_t))) {
             std::cerr << "ERROR: could not save file " << output_path << "\n";
             MPI_Abort(MPI_COMM_WORLD, 1);
